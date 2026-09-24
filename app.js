@@ -884,8 +884,8 @@ function updatePlaying(dt) {
 
   if (levelTimeLeft <= 0) {
     levelTimeLeft = 0;
-    // Resolve every full 15-second round as a real contest; never show TAKE CONTROL.
-    beginKatching(Math.random() < (playerActionScore === 0 ? 0.58 : 0.50) ? "player" : "ai");
+    // No input means an AI win; active rounds retain their existing timeout contest.
+    beginKatching(playerActionScore === 0 ? "player" : (Math.random() < 0.50 ? "player" : "ai"));
     return;
   }
 
