@@ -1,5 +1,5 @@
-// PATANG_VERSION: 3.1.0
-// LAST_MAJOR_CHANGE: Fixed freeze after KAT GAI, correct cut/clear/fail sounds, removed whoosh entirely
+// PATANG_VERSION: 3.2.0
+// LAST_MAJOR_CHANGE: Root-cause fix for freeze on cut, state and frame debug line added
 "use strict";
 
 const canvas=document.getElementById("gameCanvas");
@@ -21,6 +21,7 @@ let paused=false;
 let gameState="playing";
 let cutResult="";
 let stateTimer=0;
+let frameCount=0;
 let failReason="";
 let level=1;
 let timer=60;
@@ -228,13 +229,9 @@ function initAudio(){
   audioPluck=new Audio("public/assets/pluck.mp3");
   // Optional voice files intentionally disabled in shipping audio routing.
   audioVoiceDheel=null;
-  audioVoiceDheel.volume=.7;
   audioVoiceKhench=null;
-  audioVoiceKhench.volume=.7;
   audioVoiceKatGai=null;
-  audioVoiceKatGai.volume=.7;
   audioVoiceManjaGaya=null;
-  audioVoiceManjaGaya.volume=.7;
   audioWater.play().catch(function ignoreWaterPlay(){});
 }
 
@@ -720,8 +717,9 @@ function updateLooseString(dt){
 // Update active gameplay.
 function update(dt){
   updatePrompts(dt);
-  if(mode!=="playing"||paused){return;}
+  if(mode!=="playing"){return;}
   if(gameState!=="playing"){updateStateMachine(dt);return;}
+  if(paused){return;}
   clock+=dt;
   timer=Math.max(0,timer-dt);
   updatePlayer(dt);
@@ -1127,6 +1125,14 @@ function drawFrame(){
   }
   drawBumper();
   drawFail();
+  ctx.save();
+  ctx.globalAlpha=.5;
+  ctx.fillStyle="#000";
+  ctx.font="10px monospace";
+  ctx.textAlign="left";
+  ctx.textBaseline="bottom";
+  ctx.fillText("state: "+gameState+"  frames: "+frameCount,6,H()-6);
+  ctx.restore();
 }
 
 // Main RAF loop.
@@ -1135,10 +1141,11 @@ function gameLoop(now){
     pollCanvasSize();
     const dt=Math.min(.033,(now-last)/1000||0);
     last=now;
+    frameCount+=1;
     update(dt);
     drawFrame();
   }catch(err){
-    console.error("RAF tick error:",err);
+    console.error("RAF error at state " + gameState + ":", err.stack || err);
   }
   requestAnimationFrame(gameLoop);
 }
