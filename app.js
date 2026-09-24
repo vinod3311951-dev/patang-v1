@@ -17,7 +17,7 @@ let sceneReady = false;
 let gameState = "home";
 let level = 1;
 const MAX_LEVEL = 105;
-const ROUND_SECONDS = 9;
+const ROUND_SECONDS = 15;
 let levelTimeLeft = ROUND_SECONDS;
 let playerActionScore = 0;
 let contactTime = 0;
@@ -79,6 +79,7 @@ let dheelZone = null;
 let khenchZone = null;
 let pauseZone = null;
 let homePlayZone = null;
+let homeLevelsZone = null;
 
 let boyHandX = 0;
 let boyHandY = 0;
@@ -275,11 +276,18 @@ function playPluck(rate) {
 function scheduleAmbient(dt) {
   if (!audioInitialized || paused) return;
 
-  // Keep only the clean water bed. The supplied bird tracks contain
-  // distracting human/voice-like material, so they are intentionally
-  // disabled for this base build.
   if (audioWater && audioWater.paused && gameState === "playing") {
     audioWater.play().catch(() => {});
+  }
+
+  // Sparrow only: brief, independent village ambience. Crow stays off.
+  aiSparrowTimer -= dt;
+  if (aiSparrowTimer <= 0 && audioSparrow) {
+    try {
+      audioSparrow.currentTime = 0;
+      audioSparrow.play().catch(() => {});
+    } catch (e) {}
+    aiSparrowTimer = 8 + Math.random() * 10;
   }
 }
 
@@ -326,9 +334,16 @@ function recomputeLayout() {
 
   homePlayZone = {
     x: 0.5 * W - 110,
-    y: 0.60 * H - 35,
+    y: 0.56 * H - 34,
     w: 220,
-    h: 70
+    h: 64
+  };
+
+  homeLevelsZone = {
+    x: 0.5 * W - 110,
+    y: 0.65 * H - 28,
+    w: 220,
+    h: 56
   };
 
   if (oldW > 0 && oldH > 0) {
@@ -404,7 +419,15 @@ function handlePointerDown(event) {
     if (inZone(x, y, homePlayZone)) {
       resetLevel(1);
       transitionState("playing");
-      pushPrompt("FLY YOUR KITE!", "#FFFAEB", 1.5);
+      pushPrompt("FLY YOUR KITE!", "#FFFAEB", 1.2);
+      return;
+    }
+
+    if (inZone(x, y, homeLevelsZone)) {
+      // All 105 levels are unlocked: each tap advances the selected level.
+      level = level >= MAX_LEVEL ? 1 : level + 1;
+      pushPrompt("SELECTED LEVEL " + level, "#FFD700", 0.8);
+      return;
     }
 
     return;
@@ -716,8 +739,16 @@ function checkStringCrossing(dt) {
   if (playerActionScore < 2 || contactTime < 0.28) return;
 
   const difficulty = Math.min(1, (level - 1) / (MAX_LEVEL - 1));
-  const playerPower = manja + Math.min(0.24, playerActionScore * 0.025);
-  const aiPower = 0.42 + difficulty * 0.28 + Math.random() * 0.16;
+  const playerPower =
+    manja +
+    Math.min(0.16, playerActionScore * 0.016) +
+    Math.random() * 0.10;
+
+  // AI can genuinely win from level 1, and becomes progressively tougher.
+  const aiPower =
+    0.54 +
+    difficulty * 0.30 +
+    Math.random() * 0.22;
 
   if (playerPower >= aiPower) {
     cutAI();
@@ -1029,7 +1060,23 @@ function renderHome() {
     p.y + p.h * 0.52
   );
 
-  ctx.font = "bold 16px Arial, sans-serif";
+  // Colorful all-levels selector, inspired by a level-map/home control.
+  const l = homeLevelsZone;
+  roundedRectPath(ctx, l.x, l.y, l.w, l.h, 16);
+  const levelGradient = ctx.createLinearGradient(l.x, l.y, l.x + l.w, l.y);
+  levelGradient.addColorStop(0, "#FF7A00");
+  levelGradient.addColorStop(0.5, "#FFD700");
+  levelGradient.addColorStop(1, "#00A86B");
+  ctx.fillStyle = levelGradient;
+  ctx.fill();
+  ctx.strokeStyle = "#FFFFFF";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.fillStyle = "#18202A";
+  ctx.font = 'bold 19px "Arial Black", Arial, sans-serif';
+  ctx.fillText("105 LEVELS • ALL UNLOCKED", W * 0.5, l.y + l.h * 0.50, l.w * 0.92);
+
+  ctx.font = "bold 15px Arial, sans-serif";
   ctx.fillStyle = "#FFFFFF";
   ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(0,0,0,0.7)";
@@ -1039,14 +1086,14 @@ function renderHome() {
   ctx.strokeText(
     instruction,
     W * 0.5,
-    H * 0.68,
+    H * 0.74,
     W * 0.94
   );
 
   ctx.fillText(
     instruction,
     W * 0.5,
-    H * 0.68,
+    H * 0.74,
     W * 0.94
   );
 
@@ -1075,17 +1122,8 @@ function renderStrings() {
 
   ctx.lineCap = "round";
 
-  // Warm-white highlight beneath the player's black string.
-
-  ctx.beginPath();
-  ctx.moveTo(boyHandX, boyHandY);
-  ctx.lineTo(player.x, player.y);
-
-  ctx.strokeStyle = "rgba(255,250,235,0.95)";
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  // Player's string.
+  // Player's string. Keep it single dark line so no white thread
+  // appears over the middle boy's right shoulder.
 
   ctx.beginPath();
   ctx.moveTo(boyHandX, boyHandY);
