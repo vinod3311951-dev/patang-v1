@@ -1,5 +1,5 @@
-// PATANG_VERSION: 2.4.0
-// LAST_MAJOR_CHANGE: Audio gain 20x boost + master gain + test beep, KAT GAI reward sparkles, red-zone kite pulse, painted-hand string anchor post-cover-fit, HUD size tightening
+// PATANG_VERSION: 2.5.0
+// LAST_MAJOR_CHANGE: HTML audio playback replaces Web Audio entirely, debug line removed
 "use strict";
 
 const canvas=document.getElementById("gameCanvas");
@@ -10,8 +10,12 @@ const prompts=[];
 const reward={active:false,time:0,x:0,y:0,particles:[]};
 const player={x:0,y:0,vx:80,vy:0,rotation:0,direction:1};
 const ai={x:0,y:0,vx:0,vy:0,rotation:0,state:"neutral",diveTime:0,nextDive:12,hit:false};
-const ambient={water:null,waterFilter:null,waterGain:null,waterLfo:null,waterLfoGain:null,bird:0,crow:0};
-let assetsReady=false,assetError=false,mode="home",paused=false,level=1,timer=58,tension=.25,zone="green",clock=0,last=performance.now(),audioCtx=null,masterGain=null,testBeepPlayed=false,levelCutTriggered=false,rewardTriggered=false,lastSoundName="none";
+const ambient={bird:0,crow:0};
+let assetsReady=false,assetError=false,mode="home",paused=false,level=1,timer=58,tension=.25,zone="green",clock=0,last=performance.now(),levelCutTriggered=false,rewardTriggered=false;
+let audioWater=null;
+let audioSparrow=null;
+let audioCrow=null;
+let audioPluck=null;
 
 // Return canvas width.
 function W(){
@@ -123,187 +127,55 @@ function startGame(){
   resetPlayer();resetAI();scheduleAmbient();startAmbience();
 }
 
-// Log every sound trigger.
-function logSfx(name){
-  lastSoundName=name;
-  console.log('SFX triggered:',name,'audioCtx.state =',audioCtx?audioCtx.state:'null');
+// Initialize HTML audio elements on the first user gesture.
+function initAudio(){
+  if(audioWater){return;}
+  audioWater=new Audio("public/assets/water.mp3");
+  audioWater.loop=true;
+  audioWater.volume=.35;
+  audioSparrow=new Audio("public/assets/sparrow.mp3");
+  audioSparrow.volume=.55;
+  audioCrow=new Audio("public/assets/crow.mp3");
+  audioCrow.volume=.55;
+  audioPluck=new Audio("public/assets/pluck.mp3");
+  audioPluck.volume=.60;
+  audioWater.play().catch(function ignoreWaterPlay(){});
 }
 
-// Play a self-cleaning oscillator tone.
-function tone(name,type,hz,duration,gainValue,endHz,delay){
-  logSfx(name);
-  if(!audioCtx||audioCtx.state!=="running"){return;}
-  const start=audioCtx.currentTime+(delay||0);
-  const o=audioCtx.createOscillator();
-  const g=audioCtx.createGain();
-  o.type=type;o.frequency.setValueAtTime(hz,start);
-  if(endHz){o.frequency.exponentialRampToValueAtTime(endHz,start+duration);}
-  g.gain.setValueAtTime(gainValue,start);g.gain.exponentialRampToValueAtTime(.0001,start+duration);
-  o.connect(g);g.connect(masterGain);
-  o.onended=function toneEnded(){o.disconnect();g.disconnect();};
-  o.start(start);o.stop(start+duration);
+// Play the shared pluck asset at a selected rate.
+function playPluck(rate){
+  if(!audioPluck){return;}
+  audioPluck.currentTime=0;
+  audioPluck.playbackRate=rate;
+  audioPluck.play().catch(function ignorePluckPlay(){});
 }
 
-// Create white or brown noise.
-function noiseBuffer(seconds,brown){
-  const length=Math.max(1,Math.floor(audioCtx.sampleRate*seconds));
-  const b=audioCtx.createBuffer(1,length,audioCtx.sampleRate);
-  const d=b.getChannelData(0);
-  let prev=0;
-  for(let i=0;i<length;i+=1){
-    const white=Math.random()*2-1;
-    prev=brown?(prev+.02*white)/1.02:white;
-    d[i]=brown?prev*3.5:white;
-  }
-  return b;
-}
-
-// Play DHEEL whoosh.
-function sfxDheel(){
-  if(!audioCtx){return;}
-  logSfx("dheel");
-  if(!audioCtx||audioCtx.state!=="running"){return;}
-  const now=audioCtx.currentTime,s=audioCtx.createBufferSource(),f=audioCtx.createBiquadFilter(),g=audioCtx.createGain();
-  s.buffer=noiseBuffer(.09,false);f.type="bandpass";f.frequency.value=800;f.Q.value=.8;
-  g.gain.setValueAtTime(.35,now);g.gain.exponentialRampToValueAtTime(.0001,now+.08);
-  s.connect(f);f.connect(g);g.connect(masterGain);
-  s.onended=function dheelEnded(){s.disconnect();f.disconnect();g.disconnect();};
-  s.start(now);s.stop(now+.08);
-}
-
-// Play KHENCH pluck.
-function sfxKhench(){
-  if(!audioCtx){return;}
-  tone("khench","triangle",220,.10,.30,null,0);
-}
-
-// Play KAT GAI snap.
-function sfxKatGai(){
-  if(!audioCtx){return;}
-  tone("kat gai 400","square",400,.06,.40,null,0);
-  tone("kat gai 600","square",600,.06,.40,null,.065);
-}
-
-// Play MANJA GAYA twang.
-function sfxManja(){
-  if(!audioCtx){return;}
-  logSfx("manja gaya");
-  if(!audioCtx||audioCtx.state!=="running"){return;}
-  const now=audioCtx.currentTime,o=audioCtx.createOscillator(),v=audioCtx.createOscillator(),vg=audioCtx.createGain(),g=audioCtx.createGain();
-  o.type="sine";o.frequency.value=180;v.type="sine";v.frequency.value=5;vg.gain.value=7;
-  g.gain.setValueAtTime(.35,now);g.gain.exponentialRampToValueAtTime(.0001,now+.30);
-  v.connect(vg);vg.connect(o.frequency);o.connect(g);g.connect(masterGain);
-  o.onended=function manjaEnded(){o.disconnect();v.disconnect();vg.disconnect();g.disconnect();};
-  o.start(now);v.start(now);o.stop(now+.30);v.stop(now+.30);
-}
-
-// Play yellow warning pulse.
-function sfxYellow(){
-  if(!audioCtx){return;}
-  tone("yellow warning","sine",660,.20,.30,null,0);
-}
-
-// Play red danger pulse.
-function sfxRed(){
-  if(!audioCtx){return;}
-  tone("red danger","sine",880,.20,.35,null,0);
-}
-
-// Play level-clear chime.
-function sfxClear(){
-  if(!audioCtx){return;}
-  tone("level clear C5","sine",523,.20,.35,null,0);
-  tone("level clear E5","sine",659,.20,.35,null,.21);
-}
-
-// Play level-fail descent.
-function sfxFail(){
-  if(!audioCtx){return;}
-  tone("level fail G4","triangle",392,.20,.10,null,0);
-  tone("level fail C4","triangle",261,.20,.10,null,.21);
-}
-
-// Play sparrow chirp.
-function sfxBird(){
-  if(!audioCtx){return;}
-  tone("sparrow","sine",2500,.08,.20,3500,0);
-}
-
-// Play crow caw.
-function sfxCrow(){
-  if(!audioCtx){return;}
-  logSfx("crow");
-  if(audioCtx.state!=="running"){return;}
-  const now=audioCtx.currentTime;
-  const o=audioCtx.createOscillator();
-  const g=audioCtx.createGain();
-  o.type="sawtooth";
-  o.frequency.setValueAtTime(400,now);
-  g.gain.setValueAtTime(.0001,now);
-  g.gain.linearRampToValueAtTime(.20,now+.015);
-  g.gain.exponentialRampToValueAtTime(.0001,now+.20);
-  o.connect(g);
-  g.connect(masterGain);
-  o.onended=function crowEnded(){o.disconnect();g.disconnect();};
-  o.start(now);
-  o.stop(now+.20);
-}
-
-// Start continuous flowing water.
-function startAmbience(){
-  if(!audioCtx||audioCtx.state!=="running"||ambient.water||paused||mode!=="playing"){return;}
-  const now=audioCtx.currentTime;
-  const water=audioCtx.createBufferSource();
-  const waterFilter=audioCtx.createBiquadFilter();
-  const waterGain=audioCtx.createGain();
-  const waterLfo=audioCtx.createOscillator();
-  const waterLfoGain=audioCtx.createGain();
-  water.buffer=noiseBuffer(3,false);
-  water.loop=true;
-  waterFilter.type="highpass";
-  waterFilter.frequency.value=1000;
-  waterGain.gain.value=.12;
-  waterLfo.frequency.value=.08;
-  waterLfoGain.gain.value=.008;
-  water.connect(waterFilter);
-  waterFilter.connect(waterGain);
-  waterGain.connect(masterGain);
-  waterLfo.connect(waterLfoGain);
-  waterLfoGain.connect(waterGain.gain);
-  water.start(now);
-  waterLfo.start(now);
-  ambient.water=water;
-  ambient.waterFilter=waterFilter;
-  ambient.waterGain=waterGain;
-  ambient.waterLfo=waterLfo;
-  ambient.waterLfoGain=waterLfoGain;
-}
-
-// Stop continuous water ambience.
+// Pause looping water.
 function stopAmbience(){
-  const sources=["water","waterLfo"];
-  for(let i=0;i<sources.length;i+=1){
-    const node=ambient[sources[i]];
-    if(node){try{node.stop();}catch(error){}node.disconnect();ambient[sources[i]]=null;}
-  }
-  const nodes=["waterFilter","waterGain","waterLfoGain"];
-  for(let i=0;i<nodes.length;i+=1){
-    const node=ambient[nodes[i]];
-    if(node){node.disconnect();ambient[nodes[i]]=null;}
-  }
+  if(audioWater){audioWater.pause();}
+}
+
+// Resume looping water.
+function startAmbience(){
+  if(audioWater&&!paused){audioWater.play().catch(function ignoreWaterResume(){});}
 }
 
 // Schedule sparrows and crows from the RAF clock.
 function scheduleAmbient(){
-  ambient.bird=clock+2+Math.random()*2;
+  ambient.bird=clock+3+Math.random()*4;
   ambient.crow=clock+8+Math.random()*12;
 }
 
-// Update minimal intermittent ambience from RAF time.
+// Update HTML ambience from RAF time.
 function updateAmbient(){
-  if(!audioCtx){return;}
-  if(clock>=ambient.bird){sfxBird();ambient.bird=clock+2+Math.random()*2;}
-  if(clock>=ambient.crow){sfxCrow();ambient.crow=clock+8+Math.random()*12;}
+  if(clock>=ambient.bird){
+    if(audioSparrow){audioSparrow.currentTime=0;audioSparrow.play().catch(function ignoreSparrowPlay(){});}
+    ambient.bird=clock+3+Math.random()*4;
+  }
+  if(clock>=ambient.crow){
+    if(audioCrow){audioCrow.currentTime=0;audioCrow.play().catch(function ignoreCrowPlay(){});}
+    ambient.crow=clock+8+Math.random()*12;
+  }
 }
 
 // Queue a canvas prompt.
@@ -322,13 +194,13 @@ function updatePrompts(dt){
 // Apply DHEEL tap.
 function doDheel(){
   if(mode!=="playing"||paused){return;}
-  player.vy=-180;tension=clamp(tension-.04,0,1);sfxDheel();prompt("DHEEL","#00BFFF",26,.8);
+  player.vy=-180;tension=clamp(tension-.04,0,1);playPluck(1.25);prompt("DHEEL","#00BFFF",26,.8);
 }
 
 // Apply KHENCH tap.
 function doKhench(){
   if(mode!=="playing"||paused){return;}
-  player.vy=180;tension=clamp(tension-.06,0,1);sfxKhench();prompt("KHENCH","#FF3B30",26,.8);
+  player.vy=180;tension=clamp(tension-.06,0,1);playPluck(.85);prompt("KHENCH","#FF3B30",26,.8);
 }
 
 // Toggle pause and ambient.
@@ -336,19 +208,6 @@ function togglePause(){
   if(mode!=="playing"){return;}
   paused=!paused;
   if(paused){stopAmbience();}else{startAmbience();scheduleAmbient();}
-}
-
-// Play one routing test beep after audio initialization.
-function playTestBeep(){
-  if(!audioCtx||!masterGain){return;}
-  logSfx("test beep");
-  const now=audioCtx.currentTime;
-  const o=audioCtx.createOscillator();
-  const g=audioCtx.createGain();
-  o.type="sine";o.frequency.value=440;g.gain.value=.5;
-  o.connect(g);g.connect(masterGain);
-  o.onended=function testBeepEnded(){o.disconnect();g.disconnect();};
-  o.start(now);o.stop(now+.10);
 }
 
 // Convert pointer to canvas pixels.
@@ -365,18 +224,7 @@ function hit(p,z){
 
 // Handle the sole pointer interaction.
 function handlePointerDown(e){
-  if(!audioCtx){
-    const AudioConstructor=window.AudioContext||window.webkitAudioContext;
-    if(AudioConstructor){
-      audioCtx=new AudioConstructor();
-      masterGain=audioCtx.createGain();
-      masterGain.gain.value=1.0;
-      masterGain.connect(audioCtx.destination);
-    }
-  }
-  if(audioCtx&&audioCtx.state==="suspended"){audioCtx.resume();}
-  if(audioCtx&&!testBeepPlayed){playTestBeep();testBeepPlayed=true;}
-  console.log("AUDIO: ctx state = "+(audioCtx?audioCtx.state:"unavailable"));
+  initAudio();
   e.preventDefault();
   const p=pointerPoint(e);
   if(mode==="home"&&hit(p,layout.play)){startGame();return;}
@@ -435,7 +283,7 @@ function updateAI(dt){
 function cutKite(){
   if(levelCutTriggered){tension=1;return;}
   levelCutTriggered=true;
-  sfxKatGai();
+  playPluck(1.6);
   prompt("KAT GAI!","#FF0000",38,1.5);
   startReward();
   tension=.25;
@@ -448,9 +296,6 @@ function startReward(){
   rewardTriggered=true;
   reward.active=true;reward.time=0;reward.x=ai.x;reward.y=ai.y;reward.particles.length=0;
   for(let i=0;i<12;i+=1){const angle=i*Math.PI*2/12;reward.particles.push({vx:Math.cos(angle)*200,vy:Math.sin(angle)*200});}
-  tone("reward G5","sine",784,.18,.35,null,0);
-  tone("reward B5","sine",988,.18,.35,null,.15);
-  tone("reward D6","sine",1175,.18,.35,null,.30);
 }
 
 // Update the RAF-driven reward animation.
@@ -470,8 +315,8 @@ function updateTension(dt){
   tension=clamp(tension,0,1);
   const next=tension>=.85?"red":tension>=.65?"yellow":"green";
   if(next!==zone){
-    if(next==="yellow"){sfxYellow();prompt("SAVADHAN","#FFD700",26,.8);}
-    if(next==="red"){sfxRed();prompt("KHATRA","#FF4500",26,.8);}
+    if(next==="yellow"){prompt("SAVADHAN","#FFD700",26,.8);}
+    if(next==="red"){prompt("KHATRA","#FF4500",26,.8);}
     zone=next;
   }
   if(tension>=1){cutKite();}
@@ -479,7 +324,6 @@ function updateTension(dt){
 
 // Clear and advance level.
 function clearLevel(){
-  sfxClear();
   prompt("LEVEL CLEAR","#00FF00",38,1.2);
   level+=1;
   timer=levelDuration(level);
@@ -661,26 +505,11 @@ function drawHome(){
   ctx.fillStyle="#1a2340";ctx.font="900 20px Arial";ctx.fillText(assetsReady?"PLAY":"LOADING…",W()*.5,layout.play.y+layout.play.h/2);
 }
 
-// Draw on-canvas audio diagnostics.
-function drawAudioDebug(){
-  ctx.save();
-  ctx.font="12px monospace";
-  ctx.textAlign="left";
-  ctx.textBaseline="top";
-  ctx.fillStyle="#fff";
-  ctx.strokeStyle="rgba(0,0,0,.8)";
-  ctx.lineWidth=3;
-  const text="AUDIO: "+(audioCtx?audioCtx.state:"null")+"  MASTER: "+(masterGain?masterGain.gain.value:"null")+"  SFX: "+lastSoundName;
-  ctx.strokeText(text,8,8);
-  ctx.fillText(text,8,8);
-  ctx.restore();
-}
-
 // Render exact mandated stack.
 function drawFrame(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   drawScene();
-  if(mode==="home"){drawHome();drawAudioDebug();return;}
+  if(mode==="home"){drawHome();return;}
   drawString();
   drawAIString();
   drawAI();
@@ -690,7 +519,6 @@ function drawFrame(){
   drawDangerBar();
   drawPrompts();
   drawControls();
-  drawAudioDebug();
 }
 
 // Main RAF loop.
