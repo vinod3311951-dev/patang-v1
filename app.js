@@ -1,3 +1,5 @@
+// PATANG_VERSION: 1.4.0
+// LAST_MAJOR_CHANGE: Hybrid PNG backgrounds + code-drawn kite foreground
 "use strict";
 
 const canvas = document.getElementById("gameCanvas");
@@ -15,7 +17,7 @@ const resultStars = document.getElementById("resultStars");
 const levelBadge = document.getElementById("levelBadge");
 const muteButton = document.getElementById("muteButton");
 
-const COLORS = { white:"#fffdf4", gold:"#ffd65a", indigo:"#5c6cff", red:"#ff5364", jade:"#42d887", ink:"#172044", skin:"#c68b5c", skinShadow:"#a06d45", auntySkin:"#b87d51", hair:"#1c1410", kurta:"#f4f0e8", beige:"#e8dcc4", saffron:"#e07a1f", saffronDark:"#a8451a", sareeGold:"#d4a24a", bindi:"#c8102e", wood:"#8a5a2b", leaf:"#2d8a3e", marigold:"#ff8c1a", marigoldLight:"#ffb340" };
+const COLORS = { cream:"#f0e6d2", marigold:"#d89424", terracotta:"#b65a3a", vermillion:"#c94732", navy:"#172044", blue:"#496a8f", mutedGold:"#d7ad55" };
 const SAVE_KEY = "patang";
 let save = loadSave();
 let currentLevel = 1;
@@ -46,6 +48,14 @@ let nextDustAt = 2.5;
 let timeOfDay = "golden";
 let birds = [];
 let dpr = 1;
+let assetsReady = false;
+let assetFailures = 0;
+let loadedAssets = 0;
+let hudHitZones = {};
+// Asset path relative to repo root: public/assets/bg-sky.png
+const skyImage = new Image();
+// Asset path relative to repo root: public/assets/bg-rooftop.png
+const rooftopImage = new Image();
 
 // Load persistent settings and progress.
 function loadSave() {
@@ -62,25 +72,66 @@ function saveGame() {
   localStorage.setItem(SAVE_KEY, JSON.stringify(save));
 }
 
-// Resize the canvas for crisp high-DPI drawing.
-function resizeCanvas() {
-  dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.round(innerWidth * dpr);
-  canvas.height = Math.round(innerHeight * dpr);
-  canvas.style.width = innerWidth + "px";
-  canvas.style.height = innerHeight + "px";
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+// Recompute positions that depend on the current canvas dimensions.
+function recomputeLayout() {
   if (mode !== "playing") resetPositions();
 }
 
-// Return canvas CSS width.
-function W() {
-  return canvas.width / dpr;
+// Resize the canvas buffer to the viewport.
+function resizeCanvas() {
+  dpr = 1;
+  canvas.width = Math.max(1, window.innerWidth);
+  canvas.height = Math.max(1, window.innerHeight);
+  canvas.style.width = window.innerWidth + "px";
+  canvas.style.height = window.innerHeight + "px";
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  recomputeLayout();
 }
 
-// Return canvas CSS height.
+// Poll viewport size from requestAnimationFrame to prevent stale blank buffers.
+function pollCanvasSize() {
+  if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) resizeCanvas();
+}
+
+// Return canvas width in drawing-buffer pixels.
+function W() {
+  return canvas.width;
+}
+
+// Return canvas height in drawing-buffer pixels.
 function H() {
-  return canvas.height / dpr;
+  return canvas.height;
+}
+
+// Convert pointer coordinates through the canvas pixel buffer, not CSS size.
+function canvasPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x:(event.clientX - rect.left) * (canvas.width / rect.width),
+    y:(event.clientY - rect.top) * (canvas.height / rect.height)
+  };
+}
+
+// Mark one required PNG as loaded and enable gameplay only when both succeeded.
+function assetLoaded() {
+  loadedAssets += 1;
+  if (loadedAssets === 2 && assetFailures === 0) assetsReady = true;
+}
+
+// Record a PNG load failure while keeping the warm fallback visible.
+function assetFailed() {
+  assetFailures += 1;
+  assetsReady = false;
+}
+
+// Load the two repository-local painted scene assets.
+function loadAssets() {
+  skyImage.onload = assetLoaded;
+  skyImage.onerror = assetFailed;
+  rooftopImage.onload = assetLoaded;
+  rooftopImage.onerror = assetFailed;
+  skyImage.src = "public/assets/bg-sky.png";
+  rooftopImage.src = "public/assets/bg-rooftop.png";
 }
 
 // Build the open 100-level selector.
@@ -124,6 +175,8 @@ function resetPositions() {
 
 // Initialize one duel.
 function startGame(level) {
+  if (!assetsReady) return;
+  unlockAudio();
   currentLevel = Math.max(1, Math.min(100, level));
   mode = "playing";
   paused = false;
@@ -141,11 +194,10 @@ function startGame(level) {
   resetAmbientSchedule();
   resetPositions();
   hideAllPanels();
-  hud.classList.remove("hidden");
-  statusBar.classList.remove("hidden");
+  hud.classList.add("hidden");
+  statusBar.classList.add("hidden");
   levelBadge.textContent = "L" + currentLevel;
   statusBar.textContent = "45s · Cross, KHENCH ↓, then DHEEL ↑";
-  unlockAudio();
   speakHindi("Khench", false);
 }
 
@@ -375,24 +427,27 @@ function speakHindi(text, cancelFirst = true) {
 
 // Handle pointer start.
 function pointerDown(event) {
-  if (mode !== "playing" || paused || celebration) return;
   unlockAudio();
+  const point = canvasPoint(event);
+  if (handleCanvasButton(point.x, point.y)) return;
+  if (mode !== "playing" || paused || celebration || !assetsReady) return;
   pointer.active = true;
-  pointer.x = event.clientX;
-  pointer.y = event.clientY;
-  pointer.lastY = event.clientY;
+  pointer.x = point.x;
+  pointer.y = point.y;
+  pointer.lastY = point.y;
   canvas.setPointerCapture?.(event.pointerId);
 }
 
 // Handle pointer movement and gesture intent.
 function pointerMove(event) {
   if (!pointer.active || mode !== "playing" || paused || celebration) return;
-  const dy = event.clientY - pointer.lastY;
-  pointer.x = event.clientX;
-  pointer.y = event.clientY;
+  const point = canvasPoint(event);
+  const dy = point.y - pointer.lastY;
+  pointer.x = point.x;
+  pointer.y = point.y;
   if (dy > 2) beginKhench();
   if (dy < -2) beginDheel();
-  pointer.lastY = event.clientY;
+  pointer.lastY = point.y;
 }
 
 // Handle pointer release as DHEEL.
@@ -489,7 +544,7 @@ function updateAI(dt) {
 
 // Detect string crossing from rooftop anchors to kites.
 function updateCrossing() {
-  const p0 = { x:W() * 0.22, y:H() * 0.86 };
+  const p0 = { x:W() * 0.42, y:H() * 0.62 };
   const a0 = { x:W() * 0.78, y:H() * 0.86 };
   const hit = segmentIntersection(p0, player, a0, ai);
   if (hit && !crossed) {
@@ -531,7 +586,7 @@ function triggerLoss(reason) {
 
 // Spawn indigo particles along the cut region.
 function spawnCutParticles() {
-  const p0 = { x:W()*0.22, y:H()*0.86 };
+  const p0 = { x:W()*0.42, y:H()*0.62 };
   const a0 = { x:W()*0.78, y:H()*0.86 };
   const hit = segmentIntersection(p0, player, a0, ai) || { x:(player.x+ai.x)/2, y:(player.y+ai.y)/2 };
   for (let i = 0; i < 30; i += 1) {
@@ -583,165 +638,36 @@ function lossDetail(reason) {
   return "Time ran out.";
 }
 
-// Draw the reusable India Frame scene with layered parallax and living motion.
-function drawIndiaFrame(time) {
-  drawSky(time);
-  drawSun();
-  const kiteOffset = player.x - W() * 0.31;
-  drawFarCity(kiteOffset * 0.06);
-  drawMidRooftops(kiteOffset * 0.12);
-  drawForegroundRoof(kiteOffset * 0.20);
-  drawSacredMark(kiteOffset * 0.20);
-  drawPaanStall(kiteOffset * 0.12);
-  drawPaanWala("idle", sceneTime, kiteOffset * 0.12);
-  drawClothesline(kiteOffset * 0.20);
-  drawLooseManjha(kiteOffset * 0.20);
-  drawAunty("laundry", sceneTime, kiteOffset * 0.20);
-  drawChaiwala("stir", sceneTime, kiteOffset * 0.12);
-  drawBoy(getBoyPose(), sceneTime);
-  drawBirds(sceneTime);
-  drawDustMotes();
+// Draw the warm fallback while PNG assets are loading or unavailable.
+function drawAssetFallback() {
+  ctx.fillStyle = "#c9784a";
+  ctx.fillRect(0, 0, W(), H());
+  ctx.fillStyle = COLORS.cream;
+  ctx.font = "700 16px system-ui";
+  ctx.textAlign = "center";
+  ctx.fillText(assetFailures ? "Scene assets unavailable" : "Loading rooftop…", W() / 2, H() / 2);
 }
 
-// Draw a tintable sky.
-function drawSky(time) {
-  const g = ctx.createLinearGradient(0, 0, 0, H());
-  if (time === "night") { g.addColorStop(0,"#101b4b"); g.addColorStop(1,"#4c3766"); }
-  else if (time === "dawn") { g.addColorStop(0,"#536fa8"); g.addColorStop(1,"#f4b58a"); }
-  else if (time === "noon") { g.addColorStop(0,"#397bd1"); g.addColorStop(1,"#9ed9ef"); }
-  else { g.addColorStop(0,"#304d98"); g.addColorStop(0.55,"#7895ca"); g.addColorStop(1,"#f6b267"); }
-  ctx.fillStyle = g;
-  ctx.fillRect(0,0,W(),H());
+// Draw the opaque painted sky layer from the repository asset.
+function drawSkyAsset() {
+  ctx.drawImage(skyImage, 0, 0, W(), H());
 }
 
-// Draw golden-hour sun glow with a subtle eight-second pulse.
-function drawSun() {
-  const x=W()*0.18, y=H()*0.55;
-  const pulse=1+Math.sin(sceneTime*Math.PI/4)*0.04;
-  const radius=95*pulse;
-  const g=ctx.createRadialGradient(x,y,4,x,y,radius);
-  g.addColorStop(0,"#fff8c8cc"); g.addColorStop(1,"#ffd65a00");
-  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,radius,0,Math.PI*2); ctx.fill();
+// Draw the transparent painted rooftop layer, scaled to width and anchored bottom.
+function drawRooftopAsset() {
+  const scale = W() / rooftopImage.naturalWidth;
+  const height = rooftopImage.naturalHeight * scale;
+  ctx.drawImage(rooftopImage, 0, H() - height, W(), height);
 }
 
-// Draw distant city silhouettes with six-percent kite parallax.
-function drawFarCity(offset) {
-  ctx.fillStyle="#26375b55";
-  for(let x=-45;x<W()+45;x+=32){ const h=24+((x*7)%42+42)%42; ctx.fillRect(x+offset,H()*0.61-h,28,h); }
-}
-
-// Draw three mid-depth rooftops with twelve-percent kite parallax.
-function drawMidRooftops(offset) {
-  const roofs=[{x:-20,y:.66,w:.34},{x:.36*W(),y:.61,w:.28},{x:.7*W(),y:.68,w:.34}];
-  roofs.forEach((r,i)=>{ const x=r.x+offset; const y=r.y*H(); const w=r.w*W(); ctx.fillStyle=i===1?"#8d604f":"#74564d"; ctx.fillRect(x,y,w,H()-y); ctx.fillStyle="#4a4a56"; ctx.fillRect(x+w*.58,y-32,38,32); ctx.fillStyle="#2d3246"; ctx.fillRect(x+w*.63,y-49,2,17); ctx.strokeStyle="#34364a"; ctx.lineWidth=2; ctx.beginPath();ctx.moveTo(x+w*.2,y);ctx.lineTo(x+w*.2,y-50);ctx.lineTo(x+w*.24,y-58);ctx.stroke(); });
-}
-
-// Draw foreground terrace with twenty-percent kite parallax.
-function drawForegroundRoof(offset) {
-  const y=H()*.82;
-  ctx.fillStyle="#a46b50";ctx.fillRect(-40+offset,y,W()+80,H()-y);
-  ctx.fillStyle="#70483f";ctx.fillRect(-40+offset,y-18,W()+80,18);
-  ctx.fillStyle="#503a3d33";ctx.beginPath();ctx.moveTo(W()*.1+offset,y);ctx.lineTo(W()*.43+offset,H());ctx.lineTo(W()*.31+offset,H());ctx.closePath();ctx.fill();
-}
-
-// Draw four independently swaying printed cloth pieces tied to wind strength.
-function drawClothesline(offset) {
-  const y=H()*.73;
-  const windScale=1+getLevelConfig(currentLevel).wind/45;
-  const cloth=[{f:.14,p:.2,h:.71},{f:.24,p:1.7,h:.83},{f:.35,p:3.1,h:.64},{f:.47,p:4.8,h:.76}];
-  ctx.strokeStyle=COLORS.hair;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(W()*.07+offset,y-55);ctx.quadraticCurveTo(W()*.34+offset,y-38,W()*.57+offset,y-52);ctx.stroke();
-  cloth.forEach((c,i)=>{const angle=Math.sin(sceneTime*c.h+c.p)*(6*Math.PI/180)*windScale;const x=W()*c.f+offset;ctx.save();ctx.translate(x,y-48);ctx.rotate(angle);ctx.fillStyle=[COLORS.gold,COLORS.jade,COLORS.kurta,COLORS.red][i];ctx.beginPath();ctx.moveTo(0,0);ctx.quadraticCurveTo(14,-2,28,1);ctx.lineTo(25,41);ctx.quadraticCurveTo(13,38,3,38);ctx.closePath();ctx.fill();ctx.lineWidth=1.2;ctx.strokeStyle=i===2?COLORS.beige:COLORS.white;if(i===0){for(let d=7;d<25;d+=8){ctx.beginPath();ctx.arc(d,13+(d%3)*5,1.5,0,Math.PI*2);ctx.fillStyle=COLORS.red;ctx.fill();}}if(i===1){for(let q=8;q<35;q+=8){ctx.beginPath();ctx.moveTo(3,q);ctx.lineTo(25,q);ctx.stroke();}}if(i===3){ctx.fillStyle=COLORS.gold;for(let q=0;q<2;q++){ctx.beginPath();ctx.arc(10+q*10,18+q*8,2.2,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(13+q*10,18+q*8,2.2,0,Math.PI*2);ctx.fill();}}ctx.restore();});
-}
-
-// Draw a loose rooftop manjha thread fluttering with the same wind.
-function drawLooseManjha(offset) {
-  const gust=wind.x/Math.max(8,getLevelConfig(currentLevel).wind);
-  const x=W()*.61+offset,y=H()*.815;
-  ctx.strokeStyle=COLORS.white;ctx.globalAlpha=.45;ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x,y);ctx.quadraticCurveTo(x+18+gust*10,y-18,x+38+gust*16,y-5);ctx.stroke();ctx.globalAlpha=1;
-}
-
-// Choose the protagonist pose from the current game state.
-function getBoyPose() {
-  if(celebration) return celebration.loss?"loss":"celebrate";
-  if(actionPhase==="khench") return "khench";
-  if(actionPhase==="dheel") return "dheel";
-  return "kite";
-}
-
-// Draw the shared India Frame boy with a face, kurta, hand and charkhi.
-function drawBoy(pose, sceneTime) {
-  if(mode!=="playing"&&mode!=="result") return;
-  const x=W()*.5,y=H()*.96;
-  const breathe=Math.sin(sceneTime*1.7)*1.5;
-  const headTurn=Math.sin(sceneTime*.42)*1.4;
-  const lean=pose==="khench"?-7:pose==="dheel"?3:pose==="loss"?6:0;
-  const armLift=pose==="celebrate"?-50:pose==="khench"?-12:pose==="dheel"?8:0;
-  ctx.save();ctx.translate(x+lean,y+breathe);
-  ctx.fillStyle=COLORS.kurta;ctx.strokeStyle=COLORS.beige;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(-50,0);ctx.quadraticCurveTo(-48,-68,-30,-83);ctx.quadraticCurveTo(0,-96,30,-83);ctx.quadraticCurveTo(48,-68,50,0);ctx.closePath();ctx.fill();ctx.stroke();
-  ctx.strokeStyle=COLORS.skinShadow;ctx.beginPath();ctx.moveTo(-9,-80);ctx.lineTo(0,-70);ctx.lineTo(9,-80);ctx.stroke();ctx.beginPath();ctx.moveTo(-4,-55);ctx.quadraticCurveTo(1,-49,5,-44);ctx.stroke();
-  ctx.fillStyle=COLORS.skinShadow;ctx.beginPath();ctx.ellipse(headTurn,-91,24,29,0,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle=COLORS.skin;ctx.beginPath();ctx.ellipse(headTurn,-94,23,28,0,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.arc(headTurn,-105,23,Math.PI,Math.PI*2);ctx.quadraticCurveTo(-4,-124,11,-116);ctx.quadraticCurveTo(18,-112,22,-102);ctx.lineTo(20,-112);ctx.quadraticCurveTo(2,-127,-20,-111);ctx.closePath();ctx.fill();ctx.fillRect(-23+headTurn,-108,4,14);
-  drawBoyFace(headTurn,-95);
-  const handX=37,handY=-61+armLift;ctx.strokeStyle=COLORS.skin;ctx.lineWidth=11;ctx.lineCap="round";ctx.beginPath();ctx.moveTo(25,-72);ctx.quadraticCurveTo(34,-66,handX,handY);ctx.stroke();ctx.fillStyle=COLORS.skin;ctx.beginPath();ctx.ellipse(handX,handY,8,6,-.2,0,Math.PI*2);ctx.fill();ctx.strokeStyle=COLORS.skinShadow;ctx.lineWidth=1;for(let i=-2;i<=2;i+=2){ctx.beginPath();ctx.moveTo(handX+2,handY+i);ctx.lineTo(handX+7,handY+i+1);ctx.stroke();}
-  drawCharkhi(handX+10,handY+4);
-  ctx.restore();
-}
-
-// Draw the protagonist's almond eyes and small facial features.
-function drawBoyFace(x,y) {
-  ctx.fillStyle=COLORS.kurta;[-8,8].forEach(dx=>{ctx.beginPath();ctx.ellipse(x+dx,y-3,5,2.7,0,0,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.sareeGold;ctx.beginPath();ctx.ellipse(x+dx,y-3,2.3,2.1,0,0,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.arc(x+dx,y-3,1.2,0,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.kurta;});ctx.strokeStyle=COLORS.hair;ctx.lineWidth=1.3;ctx.beginPath();ctx.moveTo(x-13,y-10);ctx.quadraticCurveTo(x-8,y-13,x-3,y-10);ctx.moveTo(x+3,y-10);ctx.quadraticCurveTo(x+8,y-13,x+13,y-10);ctx.stroke();ctx.strokeStyle=COLORS.skinShadow;ctx.beginPath();ctx.arc(x,y+1,4,.2,1.3);ctx.moveTo(x-3,y+2);ctx.quadraticCurveTo(x,y+4,x+3,y+2);ctx.stroke();ctx.strokeStyle=COLORS.hair;ctx.beginPath();ctx.arc(x,y+8,7,.25,Math.PI-.25);ctx.stroke();
-}
-
-// Draw the wooden charkhi and visible manjha.
-function drawCharkhi(x,y) {
-  ctx.strokeStyle=COLORS.wood;ctx.fillStyle=COLORS.wood;ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y-6,7,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(x,y+8,7,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.moveTo(x,y-6);ctx.lineTo(x,y+8);ctx.stroke();ctx.strokeStyle=COLORS.white;ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x+5,y-5);ctx.lineTo(player.x,player.y);ctx.stroke();
-}
-
-// Draw aunty as a full saffron-saree figure with face, bindi, bun and pallu.
-function drawAunty(pose, sceneTime, offset) {
-  const x=W()*.82+offset,y=H()*.82,cycle=(sceneTime%7)/7,breathe=Math.sin(sceneTime*2.1);
-  const reach=cycle<.35?Math.min(1,cycle/.18):cycle<.58?1-(cycle-.35)/.23:0;
-  ctx.save();ctx.translate(x,y);
-  ctx.fillStyle=COLORS.saffron;ctx.beginPath();ctx.moveTo(-18,0);ctx.quadraticCurveTo(-23,-48,-14,-83);ctx.quadraticCurveTo(4,-96,19,-77);ctx.quadraticCurveTo(25,-38,19,0);ctx.closePath();ctx.fill();
-  ctx.fillStyle=COLORS.saffronDark;ctx.beginPath();ctx.ellipse(0,-78,18,12,-.15,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle=COLORS.auntySkin;ctx.beginPath();ctx.ellipse(2,-103+breathe,12,15,-.12,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.arc(-2,-111,11,Math.PI,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(-11,-109,6,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.ellipse(6,-105,2.8,1.5,0,0,Math.PI*2);ctx.fill();ctx.strokeStyle=COLORS.skinShadow;ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(12,-102);ctx.quadraticCurveTo(16,-99,11,-97);ctx.stroke();ctx.fillStyle=COLORS.bindi;ctx.beginPath();ctx.arc(4,-112,1.5,0,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.sareeGold;ctx.beginPath();ctx.arc(13,-101,2,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle=COLORS.saffron;ctx.strokeStyle=COLORS.sareeGold;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(-9,-88);ctx.quadraticCurveTo(-23,-70,-20,-24);ctx.quadraticCurveTo(-6,-38,3,-83);ctx.closePath();ctx.fill();ctx.stroke();
-  ctx.strokeStyle=COLORS.auntySkin;ctx.lineWidth=8;ctx.lineCap="round";ctx.beginPath();ctx.moveTo(10,-78);ctx.lineTo(22,-75-reach*24);ctx.lineTo(31,-69-reach*29);ctx.stroke();ctx.beginPath();ctx.moveTo(-9,-76);ctx.lineTo(-16,-50);ctx.stroke();ctx.restore();
-}
-
-// Draw chaiwala as a full figure with face, moustache, kurta, pyjama and gamchha.
-function drawChaiwala(pose, sceneTime, offset) {
-  const x=W()*.49+offset,y=H()*.61,cycle=(sceneTime%9)/9,looking=cycle>.42&&cycle<.62,stir=(cycle<.32||(cycle>.68&&cycle<.94))?Math.sin(sceneTime*8)*4:0;
-  drawChaiStall(x,y);
-  ctx.fillStyle=COLORS.beige;ctx.fillRect(x-8,y-14,7,25);ctx.fillRect(x+3,y-14,7,25);
-  ctx.fillStyle=COLORS.kurta;ctx.beginPath();ctx.moveTo(x-14,y-50);ctx.quadraticCurveTo(x,y-57,x+15,y-49);ctx.lineTo(x+12,y-13);ctx.lineTo(x-12,y-13);ctx.closePath();ctx.fill();
-  ctx.fillStyle=COLORS.skin;ctx.beginPath();ctx.ellipse(x+(looking?2:0),y-66,10,12,0,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.arc(x,y-72,10,Math.PI,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.moveTo(x-7,y-62);ctx.quadraticCurveTo(x,y-57,x+7,y-62);ctx.quadraticCurveTo(x,y-65,x-7,y-62);ctx.fill();ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.ellipse(x-4,y-67,1.3,1,0,0,Math.PI*2);ctx.ellipse(x+4,y-67,1.3,1,0,0,Math.PI*2);ctx.fill();ctx.strokeStyle=COLORS.skinShadow;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,y-66);ctx.lineTo(x+2,y-63);ctx.stroke();ctx.strokeStyle=COLORS.hair;ctx.beginPath();ctx.arc(x,y-58,3,Math.PI,0);ctx.stroke();
-  ctx.strokeStyle=COLORS.skin;ctx.lineWidth=6;ctx.beginPath();ctx.moveTo(x+9,y-43);ctx.lineTo(x+22+stir,y-27);ctx.moveTo(x-10,y-43);ctx.lineTo(x-21,y-25);ctx.stroke();
-  ctx.strokeStyle=COLORS.saffron;ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(x-8,y-49);ctx.lineTo(x+4,y-17);ctx.stroke();ctx.strokeStyle=COLORS.kurta;ctx.lineWidth=1;for(let q=-4;q<6;q+=4){ctx.beginPath();ctx.moveTo(x-5+q,y-46);ctx.lineTo(x+6+q,y-21);ctx.stroke();}
-}
-
-// Draw chai stall, kettle, mithai tray and marigold garland.
-function drawChaiStall(x,y) {
-  ctx.fillStyle=COLORS.wood;ctx.fillRect(x-34,y-22,72,9);ctx.fillRect(x-31,y-13,5,30);ctx.fillRect(x+29,y-13,5,30);ctx.fillStyle=COLORS.white;ctx.beginPath();ctx.ellipse(x+23,y-27,8,5,0,0,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.white;ctx.fillRect(x-31,y-31,27,4);[COLORS.gold,COLORS.saffron,COLORS.kurta,COLORS.gold].forEach((c,i)=>{ctx.fillStyle=c;ctx.beginPath();ctx.arc(x-26+i*7,y-34,3,0,Math.PI*2);ctx.fill();});ctx.strokeStyle=COLORS.sareeGold;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x-34,y-54);ctx.quadraticCurveTo(x,y-42,x+34,y-54);ctx.stroke();for(let i=0;i<9;i++){const gx=x-30+i*7.5,gy=y-51+Math.sin(i/8*Math.PI)*7;ctx.fillStyle=i%2?COLORS.marigold:COLORS.marigoldLight;ctx.beginPath();ctx.arc(gx,gy,2.5,0,Math.PI*2);ctx.fill();}for(let i=0;i<4;i++){const rise=(sceneTime*.18+i*.23)%1,sx=x+23+Math.sin(sceneTime*1.3+i)*4,sy=y-34-rise*35;ctx.globalAlpha=(1-rise)*.16;ctx.fillStyle=COLORS.white;ctx.beginPath();ctx.arc(sx,sy,3.5,0,Math.PI*2);ctx.fill();}ctx.globalAlpha=1;
-}
-
-// Draw the paan stall with red cloth and green leaves.
-function drawPaanStall(offset) {
-  const x=W()*.13+offset,y=H()*.68;ctx.fillStyle=COLORS.wood;ctx.fillRect(x-27,y-17,54,25);ctx.fillStyle=COLORS.red;ctx.fillRect(x-29,y-20,58,5);for(let i=0;i<3;i++){ctx.fillStyle=COLORS.leaf;ctx.beginPath();ctx.ellipse(x-13+i*13,y-25,7,3.5,-.35,0,Math.PI*2);ctx.fill();}
-}
-
-// Draw the distant paan-wala customer silhouette; the only intentionally silhouetted human.
-function drawPaanWala(pose, sceneTime, offset) {
-  const x=W()*.2+offset,y=H()*.68;ctx.fillStyle=COLORS.ink;ctx.beginPath();ctx.arc(x,y-38,6,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.moveTo(x-7,y-31);ctx.lineTo(x+7,y-31);ctx.lineTo(x+10,y);ctx.lineTo(x-10,y);ctx.closePath();ctx.fill();
-}
-
-// Draw a small respectful diya mark on the parapet.
-function drawSacredMark(offset) {
-  const x=W()*.67+offset,y=H()*.805;ctx.strokeStyle=COLORS.saffronDark;ctx.fillStyle=COLORS.saffronDark;ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(x,y,8,.15,Math.PI-.15);ctx.stroke();ctx.beginPath();ctx.moveTo(x,y-7);ctx.quadraticCurveTo(x-4,y-13,x,y-17);ctx.quadraticCurveTo(x+4,y-13,x,y-7);ctx.fill();
+// Draw the hybrid India Frame using PNG layers only.
+function drawIndiaFrame() {
+  if (!assetsReady) {
+    drawAssetFallback();
+    return;
+  }
+  drawSkyAsset();
+  drawRooftopAsset();
 }
 
 // Draw birds with a two-frame four-hertz flap and vertical dip.
@@ -765,22 +691,72 @@ function drawDustMotes() {
   dustMotes.forEach(m=>{ctx.beginPath();ctx.arc(m.x,m.y,1.4,0,Math.PI*2);ctx.fill();});
 }
 
-// Draw one diamond kite and tail.
-function drawKite(x,y,size,color,tilt) {
-  ctx.save();ctx.translate(x,y);ctx.rotate(tilt);ctx.fillStyle=color;ctx.strokeStyle=COLORS.white;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,-size);ctx.lineTo(size*.8,0);ctx.lineTo(0,size);ctx.lineTo(-size*.8,0);ctx.closePath();ctx.fill();ctx.stroke();ctx.beginPath();ctx.moveTo(0,size);ctx.quadraticCurveTo(8,size+10,-3,size+18);ctx.stroke();ctx.restore();
+// Draw a classic code-rendered Indian patang with curved lower edges and tasselled tail.
+function drawKite(x, y, size, variant, tilt) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(tilt);
+  const left = variant === "rival" ? COLORS.blue : COLORS.vermillion;
+  const right = variant === "rival" ? COLORS.terracotta : COLORS.marigold;
+  ctx.beginPath();
+  ctx.moveTo(0, -size);
+  ctx.lineTo(size * 0.72, -size * 0.04);
+  ctx.quadraticCurveTo(size * 0.55, size * 0.55, 0, size * 1.18);
+  ctx.quadraticCurveTo(-size * 0.55, size * 0.55, -size * 0.72, -size * 0.04);
+  ctx.closePath();
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = left;
+  ctx.fillRect(-size, -size * 1.2, size, size * 2.5);
+  ctx.fillStyle = right;
+  ctx.fillRect(0, -size * 1.2, size, size * 2.5);
+  ctx.restore();
+  ctx.strokeStyle = COLORS.cream;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(0, size * 1.18);
+  ctx.quadraticCurveTo(size * .25, size * 1.55, -size * .08, size * 1.9);
+  ctx.stroke();
+  [1.38,1.62,1.84].forEach((factor,index) => {
+    const ty = size * factor;
+    ctx.fillStyle = index % 2 ? COLORS.marigold : COLORS.vermillion;
+    ctx.beginPath();
+    ctx.moveTo(-4, ty);
+    ctx.lineTo(4, ty + 2);
+    ctx.lineTo(0, ty + 8);
+    ctx.closePath();
+    ctx.fill();
+  });
+  ctx.restore();
 }
 
-// Draw strings, kites, crossing cue and tension meter.
+// Draw player and rival strings, code kites, crossing cue and tension meter.
 function drawDuel() {
-  const p0={x:W()*.22,y:H()*.86},a0={x:W()*.78,y:H()*.86};
-  ctx.lineWidth=1.7;ctx.strokeStyle=COLORS.white;ctx.beginPath();ctx.moveTo(p0.x,p0.y);ctx.lineTo(player.x,player.y);ctx.stroke();
-  if (!celebration || celebration.loss || celebration.time<.28){ctx.strokeStyle="#d8d9ff";ctx.beginPath();ctx.moveTo(a0.x,a0.y);ctx.lineTo(ai.x,ai.y);ctx.stroke();}
+  const p0={x:W()*.42,y:H()*.62},a0={x:W()*.78,y:H()*.70};
+  ctx.lineWidth=1.4;
+  ctx.strokeStyle=COLORS.cream;
+  ctx.beginPath();
+  ctx.moveTo(p0.x,p0.y);
+  ctx.quadraticCurveTo((p0.x+player.x)/2,(p0.y+player.y)/2+8,player.x,player.y);
+  ctx.stroke();
+  if (!celebration || celebration.loss || celebration.time<.28){
+    ctx.strokeStyle=COLORS.cream;
+    ctx.globalAlpha=.72;
+    ctx.beginPath();
+    ctx.moveTo(a0.x,a0.y);
+    ctx.lineTo(ai.x,ai.y);
+    ctx.stroke();
+    ctx.globalAlpha=1;
+  }
   const hit=segmentIntersection(p0,player,a0,ai);
-  if(hit){ctx.fillStyle=COLORS.gold;ctx.shadowColor=COLORS.gold;ctx.shadowBlur=14;ctx.beginPath();ctx.arc(hit.x,hit.y,5,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;}
-  drawKite(player.x,player.y,24,COLORS.gold,player.vx*.0015);
-  drawKite(ai.x,ai.y,24,COLORS.indigo,ai.vx*.0015);
+  if(hit){ctx.fillStyle=COLORS.marigold;ctx.shadowColor=COLORS.marigold;ctx.shadowBlur=12;ctx.beginPath();ctx.arc(hit.x,hit.y,5,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;}
+  const size=Math.max(24,Math.min(54,W()*.065));
+  const playerTilt=clamp(player.vx*.003-player.vy*.0015,-.55,.55);
+  const aiTilt=clamp(ai.vx*.003-ai.vy*.0015,-.55,.55);
+  drawKite(player.x,player.y,size,"player",playerTilt);
+  drawKite(ai.x,ai.y,size*.88,"rival",aiTilt);
   drawTensionMeter();
-  if(pointer.active&&actionPhase==="khench"){ctx.strokeStyle=COLORS.red;ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(pointer.x,pointer.y);ctx.lineTo(player.x,player.y);ctx.stroke();}
 }
 
 // Draw canvas tension meter.
@@ -800,10 +776,87 @@ function drawCelebration() {
   if(t>.18&&t<1.2){const q=(t-.18)/1.02;ctx.save();ctx.translate(W()/2,H()*.38-q*55);ctx.rotate(-8*Math.PI/180);ctx.globalAlpha=1-q;ctx.font="900 "+Math.min(58,W()*.13)+"px system-ui";ctx.textAlign="center";ctx.lineWidth=8;ctx.strokeStyle=COLORS.white;ctx.strokeText("WOH KAATA!",0,0);ctx.fillStyle=COLORS.gold;ctx.fillText("WOH KAATA!",0,0);ctx.restore();}
 }
 
-// Draw timer and minimal gameplay text on canvas.
+// Draw a rounded HUD pill.
+function drawPill(x, y, width, height, text) {
+  ctx.fillStyle=COLORS.navy;
+  ctx.beginPath();
+  ctx.roundRect(x,y,width,height,height/2);
+  ctx.fill();
+  ctx.fillStyle=COLORS.cream;
+  ctx.font="700 13px system-ui";
+  ctx.textAlign="center";
+  ctx.textBaseline="middle";
+  ctx.fillText(text,x+width/2,y+height/2);
+}
+
+// Draw one diamond action button.
+function drawDiamondButton(cx, cy, size, fill, label) {
+  ctx.save();
+  ctx.translate(cx,cy);
+  ctx.rotate(Math.PI/4);
+  ctx.fillStyle=fill;
+  ctx.beginPath();
+  ctx.roundRect(-size/2,-size/2,size,size,8);
+  ctx.fill();
+  ctx.rotate(-Math.PI/4);
+  ctx.fillStyle=COLORS.cream;
+  ctx.font="800 11px system-ui";
+  ctx.textAlign="center";
+  ctx.textBaseline="middle";
+  ctx.fillText(label,0,0);
+  ctx.restore();
+}
+
+// Draw one circular HUD button.
+function drawCircleButton(cx, cy, radius, label) {
+  ctx.fillStyle=COLORS.navy;
+  ctx.beginPath();
+  ctx.arc(cx,cy,radius,0,Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle=COLORS.cream;
+  ctx.font="800 16px system-ui";
+  ctx.textAlign="center";
+  ctx.textBaseline="middle";
+  ctx.fillText(label,cx,cy);
+}
+
+// Draw the complete in-canvas gameplay HUD.
 function drawCanvasHUD() {
-  const remaining=Math.max(0,45-elapsed);
-  ctx.fillStyle=COLORS.white;ctx.font="800 15px system-ui";ctx.textAlign="center";ctx.fillText(Math.ceil(remaining)+"s",W()/2,32+Math.max(0,parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sat"))||0));
+  const top=18;
+  drawPill(14,top,104,36,"Level "+currentLevel+"  ★★★");
+  const windWidth=Math.min(126,W()*.30);
+  const windX=W()/2-windWidth/2;
+  drawPill(windX,top,windWidth,36,"WIND");
+  const windRatio=clamp(Math.abs(wind.x)/Math.max(1,getLevelConfig(currentLevel).wind),0,1);
+  ctx.fillStyle=COLORS.cream;ctx.globalAlpha=.3;ctx.fillRect(windX+18,top+26,windWidth-36,3);ctx.globalAlpha=1;
+  ctx.fillStyle=COLORS.marigold;ctx.fillRect(windX+18,top+26,(windWidth-36)*windRatio,3);
+  const timeWidth=94;
+  drawPill(W()-154,top,timeWidth,36,"Time 00:"+String(Math.ceil(Math.max(0,45-elapsed))).padStart(2,"0"));
+  drawCircleButton(W()-32,top+18,18,"Ⅱ");
+  const by=H()-62;
+  drawDiamondButton(54,by,52,COLORS.vermillion,"KHENCH");
+  drawDiamondButton(118,by,52,COLORS.blue,"DHEEL");
+  drawCircleButton(W()-78,by,22,save.muted?"×":"♪");
+  drawCircleButton(W()-28,by,22,"★");
+  hudHitZones={
+    pause:{x:W()-32,y:top+18,r:24},
+    mute:{x:W()-78,y:by,r:27},
+    star:{x:W()-28,y:by,r:27},
+    khench:{x:54,y:by,r:38},
+    dheel:{x:118,y:by,r:38}
+  };
+}
+
+// Handle in-canvas HUD controls.
+function handleCanvasButton(x,y) {
+  if(mode!=="playing"||!assetsReady) return false;
+  const hit=name=>{const z=hudHitZones[name];return z&&Math.hypot(x-z.x,y-z.y)<=z.r;};
+  if(hit("pause")){togglePause();return true;}
+  if(hit("mute")){toggleMute();return true;}
+  if(hit("khench")){beginKhench();return true;}
+  if(hit("dheel")){beginDheel();return true;}
+  if(hit("star")) return true;
+  return false;
 }
 
 // Clamp a number.
@@ -825,17 +878,26 @@ function update(dt) {
   updateAI(dt);
   updateCrossing();
   updateAmbient();
-  statusBar.textContent=Math.ceil(45-elapsed)+"s · "+(actionPhase==="khench"?"KHENCH ↓":actionPhase==="dheel"?"DHEEL ↑":"Cross the strings");
+
 }
 
 // Render the current canvas frame.
 function draw() {
-  drawIndiaFrame(timeOfDay);
-  if(mode==="playing"||mode==="result"){drawDuel();drawCelebration();if(mode==="playing")drawCanvasHUD();}
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawIndiaFrame();
+  if(!assetsReady) return;
+  if(mode==="playing"||mode==="result"){
+    drawDuel();
+    drawCelebration();
+    if(mode==="playing") drawCanvasHUD();
+  }
+  drawBirds(sceneTime);
+  drawDustMotes();
 }
 
 // Main requestAnimationFrame loop owns all visual and ambient timing.
 function gameLoop(now) {
+  pollCanvasSize();
   const dt=Math.min(.033,(now-lastTime)/1000||0);
   lastTime=now;
   update(dt);
@@ -845,7 +907,7 @@ function gameLoop(now) {
 
 // Wire all UI and input events.
 function bindEvents() {
-  document.getElementById("playButton").addEventListener("click",()=>startGame(currentLevel));
+  document.getElementById("playButton").addEventListener("click",()=>{unlockAudio();startGame(currentLevel);});
   document.getElementById("levelsButton").addEventListener("click",showLevels);
   document.getElementById("levelBackButton").addEventListener("click",goHome);
   document.getElementById("pauseButton").addEventListener("click",()=>togglePause());
@@ -858,13 +920,13 @@ function bindEvents() {
   canvas.addEventListener("pointermove",pointerMove);
   canvas.addEventListener("pointerup",pointerUp);
   canvas.addEventListener("pointercancel",pointerUp);
-  window.addEventListener("resize",resizeCanvas);
   document.addEventListener("visibilitychange",()=>{if(document.hidden&&mode==="playing")togglePause(true);});
 }
 
 // Initialize the game.
 function init() {
   resizeCanvas();
+  loadAssets();
   buildLevelGrid();
   bindEvents();
   muteButton.textContent=save.muted?"×":"♪";
