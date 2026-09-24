@@ -1,866 +1,577 @@
-// PATANG_VERSION: 1.7.0
-// LAST_MAJOR_CHANGE: Danger bar game loop, canvas text prompts, AI aggression, string anchor fix, audio confirmation
+// PATANG_VERSION: 2.0.0
+// LAST_MAJOR_CHANGE: Complete rebuild — working audio, readable prompts, correct string anchor, full ambient environment
 "use strict";
 
-const canvas = document.getElementById("gameCanvas");
-const ctx = canvas.getContext("2d");
-const sceneImage = new Image();
-const zones = {play:{x:0,y:0,w:0,h:0},dheel:{x:0,y:0,w:0,h:0},khench:{x:0,y:0,w:0,h:0},pause:{x:0,y:0,w:0,h:0}};
-const promptQueue = [];
-const player = {x:0,y:0,vx:100,vy:0,rotation:0,direction:1};
-const ai = {x:0,y:0,vx:-60,vy:0,rotation:0,tension:0.3,state:"neutral",nextDiveAt:10,diveTime:0,trail:[]};
-
-let assetsReady = false;
-let assetFailed = false;
-let mode = "home";
-let paused = false;
-let currentLevel = 1;
-let elapsed = 0;
-let levelTimeLeft = 58;
-let lastTime = performance.now();
-let flightTime = 0;
-let tension = 0.3;
-let tensionZone = "safe";
-let audioCtx = null;
-let ambientSource = null;
-let ambientGain = null;
-let nextBirdAt = 0;
-let warningPulseAt = 0;
-let dangerPulseAt = 0;
-let STRING_WIDTH = 1;
+const canvas=document.getElementById("gameCanvas");
+const ctx=canvas.getContext("2d");
+const sceneImage=new Image();
+const layout={handX:0,handY:0,stringWidth:1,play:{},dheel:{},khench:{},pause:{}};
+const prompts=[];
+const player={x:0,y:0,vx:80,vy:0,rotation:0,direction:1};
+const ai={x:0,y:0,vx:0,vy:0,rotation:0,state:"neutral",diveTime:0,nextDive:12,hit:false};
+const ambient={wind:null,filter:null,gain:null,bird:0,horn:0,vendor:0,kids:0,bell:0};
+let assetsReady=false,assetError=false,mode="home",paused=false,level=1,timer=58,tension=.25,zone="green",clock=0,last=performance.now(),audioCtx=null,warningClock=0,dangerClock=0,stateText=null;
 
 // Return canvas width.
-function W() {
+function W(){
   return canvas.width;
 }
 
 // Return canvas height.
-function H() {
+function H(){
   return canvas.height;
 }
 
-// Disable legacy DOM interaction.
-function disableDomPanels() {
-  ["startScreen","levelScreen","pauseModal","resultModal","hud","statusBar"].forEach(id => {
-    const node = document.getElementById(id);
-    if (node) {
-      node.classList.add("hidden");
-      node.style.pointerEvents = "none";
-    }
-  });
+// Clamp a value.
+function clamp(v,a,b){
+  return Math.max(a,Math.min(b,v));
 }
 
-// Resize drawing buffer.
-function resizeCanvas() {
-  canvas.width = Math.max(1,window.innerWidth);
-  canvas.height = Math.max(1,window.innerHeight);
-  canvas.style.width = window.innerWidth+"px";
-  canvas.style.height = window.innerHeight+"px";
+// Hide all legacy DOM interaction.
+function hideLegacyDom(){
+  const ids=["startScreen","levelScreen","pauseModal","resultModal","hud","statusBar"];
+  for(let i=0;i<ids.length;i+=1){
+    const n=document.getElementById(ids[i]);
+    if(n){n.classList.add("hidden");n.style.pointerEvents="none";}
+  }
+}
+
+// Resize the canvas drawing buffer.
+function resizeCanvas(){
+  canvas.width=Math.max(1,innerWidth);
+  canvas.height=Math.max(1,innerHeight);
+  canvas.style.width=innerWidth+"px";
+  canvas.style.height=innerHeight+"px";
   recomputeLayout();
 }
 
-// Poll size every RAF tick.
-function pollCanvasSize() {
-  if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
-    resizeCanvas();
-  }
+// Poll resize every RAF frame.
+function pollCanvasSize(){
+  if(canvas.width!==innerWidth||canvas.height!==innerHeight){resizeCanvas();}
 }
 
-// Precompute layout and physical-pixel string width.
-function recomputeLayout() {
-  STRING_WIDTH = 1/window.devicePixelRatio;
-  const buttonY = H()-112;
-  zones.play = {x:W()*0.5-90,y:H()*0.68-30,w:180,h:60};
-  zones.dheel = {x:24,y:buttonY,w:88,h:88};
-  zones.khench = {x:128,y:buttonY,w:88,h:88};
-  zones.pause = {x:W()-58,y:12,w:46,h:46};
-  if (mode !== "playing") {
-    resetKites();
-  }
+// Recompute anchors and hit zones.
+function recomputeLayout(){
+  const BOY_HAND_X=canvas.width*.42;
+  const BOY_HAND_Y=canvas.height*.60;
+  layout.handX=BOY_HAND_X;
+  layout.handY=BOY_HAND_Y;
+  layout.stringWidth=1/window.devicePixelRatio;
+  layout.play={x:W()*.5-92,y:H()*.68-31,w:184,h:62};
+  layout.dheel={x:W()*.22-53,y:H()*.86-53,w:106,h:106};
+  layout.khench={x:W()*.50-53,y:H()*.86-53,w:106,h:106};
+  layout.pause={x:W()-54,y:14,w:40,h:40};
+  if(mode==="home"){resetPlayer();resetAI();}
 }
 
-// Load the single scene asset with fallback state.
-function loadScene() {
-  sceneImage.onload = () => {
-    assetsReady = true;
-    assetFailed = false;
-  };
-  sceneImage.onerror = () => {
-    assetsReady = false;
-    assetFailed = true;
-  };
-  sceneImage.src = "public/assets/scene.png";
+// Handle scene load.
+function sceneLoaded(){
+  assetsReady=true;
+  assetError=false;
 }
 
-// Return level duration with twenty-second floor.
-function levelDuration(level) {
-  return Math.max(20,60-level*2);
+// Handle scene error.
+function sceneFailed(){
+  assetsReady=false;
+  assetError=true;
 }
 
-// Reset player and AI positions.
-function resetKites() {
-  player.x = W()*0.34;
-  player.y = H()*0.38;
-  player.vx = 105;
-  player.vy = 0;
-  player.rotation = 0;
-  player.direction = 1;
-  ai.x = W()*0.72;
-  ai.y = H()*0.30;
-  ai.vx = -60;
-  ai.vy = 0;
-  ai.rotation = 0;
-  ai.tension = 0.3;
-  ai.state = "neutral";
-  ai.diveTime = 0;
-  ai.trail.length = 0;
-  ai.nextDiveAt = flightTime+8+Math.random()*6;
+// Load the only image asset.
+function loadScene(){
+  sceneImage.onload=sceneLoaded;
+  sceneImage.onerror=sceneFailed;
+  sceneImage.src="public/assets/scene.png";
 }
 
-// Begin gameplay.
-function startGame() {
-  if (!assetsReady) {
-    return;
-  }
-  mode = "playing";
-  paused = false;
-  elapsed = 0;
-  flightTime = 0;
-  tension = 0.3;
-  tensionZone = "safe";
-  levelTimeLeft = levelDuration(currentLevel);
-  promptQueue.length = 0;
-  resetKites();
-  recomputeLayout();
-  startAmbient();
+// Return level duration.
+function levelDuration(n){
+  return Math.max(20,60-n*2);
 }
 
-// Initialize or resume Web Audio during pointer gesture.
-function unlockAudio() {
-  if (!audioCtx) {
-    const AudioCtor = window.AudioContext || window.webkitAudioContext;
-    if (AudioCtor) {
-      audioCtx = new AudioCtor();
-    }
-  }
-  if (audioCtx && audioCtx.state === "suspended") {
-    audioCtx.resume();
-  }
+// Reset player to center sky.
+function resetPlayer(){
+  player.x=W()*.5;player.y=H()*.38;player.vx=80;player.vy=0;player.rotation=0;player.direction=1;
 }
 
-// Create noise buffer.
-function makeNoiseBuffer(seconds,brown) {
-  const length = Math.max(1,Math.floor(audioCtx.sampleRate*seconds));
-  const buffer = audioCtx.createBuffer(1,length,audioCtx.sampleRate);
-  const data = buffer.getChannelData(0);
-  let last = 0;
-  for (let i=0;i<length;i+=1) {
-    const white = Math.random()*2-1;
-    last = brown ? (last+0.02*white)/1.02 : white;
-    data[i] = brown ? last*3.5 : white;
-  }
-  return buffer;
+// Reset AI to neutral sky.
+function resetAI(){
+  ai.x=W()*.72;ai.y=H()*.30;ai.vx=-40;ai.vy=0;ai.rotation=0;ai.state="neutral";ai.diveTime=0;ai.hit=false;ai.nextDive=clock+10+Math.random()*5;
 }
 
-// Start brown-noise ambience.
-function startAmbient() {
-  if (!audioCtx || ambientSource || paused || mode !== "playing") {
-    return;
-  }
-  ambientSource = audioCtx.createBufferSource();
-  ambientGain = audioCtx.createGain();
-  const filter = audioCtx.createBiquadFilter();
-  ambientSource.buffer = makeNoiseBuffer(2,true);
-  ambientSource.loop = true;
-  filter.type = "lowpass";
-  filter.frequency.value = 400;
-  ambientGain.gain.value = 0.03;
-  ambientSource.connect(filter);
-  filter.connect(ambientGain);
-  ambientGain.connect(audioCtx.destination);
-  ambientSource.start();
-  nextBirdAt = flightTime+3+Math.random()*6;
-  console.log("AMBIENT: started");
+// Start gameplay.
+function startGame(){
+  if(!assetsReady){return;}
+  mode="playing";paused=false;timer=levelDuration(level);tension=.25;zone="green";clock=0;warningClock=0;dangerClock=0;prompts.length=0;stateText=null;
+  resetPlayer();resetAI();scheduleAmbient();startWind();
 }
 
-// Stop ambient layer.
-function stopAmbient() {
-  if (ambientSource) {
-    ambientSource.stop();
-    ambientSource.disconnect();
-    ambientSource = null;
-  }
-  if (ambientGain) {
-    ambientGain.disconnect();
-    ambientGain = null;
-  }
+// Log every sound trigger.
+function logSfx(name){
+  console.log("SFX:",name,"ctx=",audioCtx?audioCtx.state:"null");
 }
 
-// Play a short oscillator envelope.
-function playTone(name,type,hz,duration,gain,endHz) {
-  console.log("SFX: "+name);
-  if (!audioCtx) {
-    return;
-  }
-  const now = audioCtx.currentTime;
-  const oscillator = audioCtx.createOscillator();
-  const amp = audioCtx.createGain();
-  oscillator.type = type;
-  oscillator.frequency.setValueAtTime(hz,now);
-  if (endHz) {
-    oscillator.frequency.exponentialRampToValueAtTime(endHz,now+duration);
-  }
-  amp.gain.setValueAtTime(gain,now);
-  amp.gain.exponentialRampToValueAtTime(0.0001,now+duration);
-  oscillator.connect(amp);
-  amp.connect(audioCtx.destination);
-  oscillator.start(now);
-  oscillator.stop(now+duration);
+// Play a self-cleaning oscillator tone.
+function tone(name,type,hz,duration,gainValue,endHz,delay){
+  logSfx(name);
+  if(!audioCtx||audioCtx.state!=="running"){return;}
+  const start=audioCtx.currentTime+(delay||0);
+  const o=audioCtx.createOscillator();
+  const g=audioCtx.createGain();
+  o.type=type;o.frequency.setValueAtTime(hz,start);
+  if(endHz){o.frequency.exponentialRampToValueAtTime(endHz,start+duration);}
+  g.gain.setValueAtTime(gainValue,start);g.gain.exponentialRampToValueAtTime(.0001,start+duration);
+  o.connect(g);g.connect(audioCtx.destination);
+  o.onended=function toneEnded(){o.disconnect();g.disconnect();};
+  o.start(start);o.stop(start+duration);
 }
 
-// Play DHEEL noise whoosh.
-function soundDheel() {
-  console.log("SFX: dheel");
-  if (!audioCtx) {
-    return;
+// Create white or brown noise.
+function noiseBuffer(seconds,brown){
+  const length=Math.max(1,Math.floor(audioCtx.sampleRate*seconds));
+  const b=audioCtx.createBuffer(1,length,audioCtx.sampleRate);
+  const d=b.getChannelData(0);
+  let prev=0;
+  for(let i=0;i<length;i+=1){
+    const white=Math.random()*2-1;
+    prev=brown?(prev+.02*white)/1.02:white;
+    d[i]=brown?prev*3.5:white;
   }
-  const now = audioCtx.currentTime;
-  const source = audioCtx.createBufferSource();
-  const filter = audioCtx.createBiquadFilter();
-  const amp = audioCtx.createGain();
-  source.buffer = makeNoiseBuffer(0.10,false);
-  filter.type = "bandpass";
-  filter.frequency.setValueAtTime(650,now);
-  filter.frequency.exponentialRampToValueAtTime(1500,now+0.08);
-  amp.gain.setValueAtTime(0.16,now);
-  amp.gain.exponentialRampToValueAtTime(0.0001,now+0.08);
-  source.connect(filter);
-  filter.connect(amp);
-  amp.connect(audioCtx.destination);
-  source.start(now);
-  source.stop(now+0.09);
+  return b;
+}
+
+// Play DHEEL whoosh.
+function sfxDheel(){
+  logSfx("dheel");
+  if(!audioCtx||audioCtx.state!=="running"){return;}
+  const now=audioCtx.currentTime,s=audioCtx.createBufferSource(),f=audioCtx.createBiquadFilter(),g=audioCtx.createGain();
+  s.buffer=noiseBuffer(.09,false);f.type="bandpass";f.frequency.value=800;f.Q.value=.8;
+  g.gain.setValueAtTime(.18,now);g.gain.exponentialRampToValueAtTime(.0001,now+.08);
+  s.connect(f);f.connect(g);g.connect(audioCtx.destination);
+  s.onended=function dheelEnded(){s.disconnect();f.disconnect();g.disconnect();};
+  s.start(now);s.stop(now+.08);
 }
 
 // Play KHENCH pluck.
-function soundKhench() {
-  playTone("khench","triangle",220,0.10,0.18);
+function sfxKhench(){
+  tone("khench","triangle",220,.10,.18,null,0);
 }
 
-// Play kat-gai snap.
-function soundKatGai() {
-  console.log("SFX: kat gai");
-  if (!audioCtx) {
-    return;
-  }
-  const now = audioCtx.currentTime;
-  [400,600].forEach((hz,index) => {
-    const oscillator = audioCtx.createOscillator();
-    const amp = audioCtx.createGain();
-    const start = now+index*0.045;
-    oscillator.type = "square";
-    oscillator.frequency.value = hz;
-    amp.gain.setValueAtTime(0.16,start);
-    amp.gain.exponentialRampToValueAtTime(0.0001,start+0.035);
-    oscillator.connect(amp);
-    amp.connect(audioCtx.destination);
-    oscillator.start(start);
-    oscillator.stop(start+0.04);
-  });
+// Play KAT GAI snap.
+function sfxKatGai(){
+  tone("kat gai 400","square",400,.06,.16,null,0);
+  tone("kat gai 600","square",600,.06,.16,null,.065);
 }
 
-// Play manja-gaya twang.
-function soundManjaGaya() {
-  console.log("SFX: manja gaya");
-  if (!audioCtx) {
-    return;
-  }
-  const now = audioCtx.currentTime;
-  const oscillator = audioCtx.createOscillator();
-  const vibrato = audioCtx.createOscillator();
-  const vibratoGain = audioCtx.createGain();
-  const amp = audioCtx.createGain();
-  oscillator.type = "sine";
-  oscillator.frequency.value = 180;
-  vibrato.frequency.value = 7;
-  vibratoGain.gain.value = 7;
-  vibrato.connect(vibratoGain);
-  vibratoGain.connect(oscillator.frequency);
-  amp.gain.setValueAtTime(0.18,now);
-  amp.gain.exponentialRampToValueAtTime(0.0001,now+0.30);
-  oscillator.connect(amp);
-  amp.connect(audioCtx.destination);
-  oscillator.start(now);
-  vibrato.start(now);
-  oscillator.stop(now+0.31);
-  vibrato.stop(now+0.31);
+// Play MANJA GAYA twang.
+function sfxManja(){
+  logSfx("manja gaya");
+  if(!audioCtx||audioCtx.state!=="running"){return;}
+  const now=audioCtx.currentTime,o=audioCtx.createOscillator(),v=audioCtx.createOscillator(),vg=audioCtx.createGain(),g=audioCtx.createGain();
+  o.type="sine";o.frequency.value=180;v.type="sine";v.frequency.value=5;vg.gain.value=7;
+  g.gain.setValueAtTime(.18,now);g.gain.exponentialRampToValueAtTime(.0001,now+.30);
+  v.connect(vg);vg.connect(o.frequency);o.connect(g);g.connect(audioCtx.destination);
+  o.onended=function manjaEnded(){o.disconnect();v.disconnect();vg.disconnect();g.disconnect();};
+  o.start(now);v.start(now);o.stop(now+.30);v.stop(now+.30);
 }
 
-// Play bird chirp.
-function soundBird() {
-  if (!audioCtx) {
-    return;
-  }
-  const now = audioCtx.currentTime;
-  const oscillator = audioCtx.createOscillator();
-  const amp = audioCtx.createGain();
-  oscillator.frequency.setValueAtTime(1900,now);
-  oscillator.frequency.exponentialRampToValueAtTime(3100,now+0.10);
-  oscillator.frequency.exponentialRampToValueAtTime(2200,now+0.20);
-  amp.gain.setValueAtTime(0.05,now);
-  amp.gain.exponentialRampToValueAtTime(0.0001,now+0.22);
-  oscillator.connect(amp);
-  amp.connect(audioCtx.destination);
-  oscillator.start(now);
-  oscillator.stop(now+0.23);
+// Play yellow warning pulse.
+function sfxYellow(){
+  tone("yellow warning","sine",80,.15,.04,null,0);
 }
 
-// Play tension warning pulse.
-function soundWarningPulse() {
-  playTone("tension warning","sine",80,0.16,0.04);
+// Play red danger pulse.
+function sfxRed(){
+  tone("red danger","sine",120,.12,.06,null,0);
 }
 
-// Play tension danger pulse.
-function soundDangerPulse() {
-  playTone("tension danger","square",120,0.12,0.06);
+// Play level-clear chime.
+function sfxClear(){
+  tone("level clear C5","sine",523,.20,.12,null,0);
+  tone("level clear E5","sine",659,.20,.12,null,.21);
 }
 
-// Play ascending level-clear chime.
-function soundLevelClear() {
-  console.log("SFX: level clear");
-  if (!audioCtx) {
-    return;
-  }
-  const now = audioCtx.currentTime;
-  [[523.25,0],[659.25,0.2]].forEach(([hz,offset]) => {
-    const oscillator = audioCtx.createOscillator();
-    const amp = audioCtx.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.value = hz;
-    amp.gain.setValueAtTime(0.12,now+offset);
-    amp.gain.exponentialRampToValueAtTime(0.0001,now+offset+0.2);
-    oscillator.connect(amp);
-    amp.connect(audioCtx.destination);
-    oscillator.start(now+offset);
-    oscillator.stop(now+offset+0.2);
-  });
+// Play level-fail descent.
+function sfxFail(){
+  tone("level fail G4","triangle",392,.20,.10,null,0);
+  tone("level fail C4","triangle",261,.20,.10,null,.21);
 }
 
-// Play descending fail tones.
-function soundLevelFail() {
-  console.log("SFX: level fail");
-  if (!audioCtx) {
-    return;
-  }
-  const now = audioCtx.currentTime;
-  [[392,0],[261.63,0.2]].forEach(([hz,offset]) => {
-    const oscillator = audioCtx.createOscillator();
-    const amp = audioCtx.createGain();
-    oscillator.type = "triangle";
-    oscillator.frequency.value = hz;
-    amp.gain.setValueAtTime(0.10,now+offset);
-    amp.gain.exponentialRampToValueAtTime(0.0001,now+offset+0.2);
-    oscillator.connect(amp);
-    amp.connect(audioCtx.destination);
-    oscillator.start(now+offset);
-    oscillator.stop(now+offset+0.2);
-  });
+// Play sparrow chirp.
+function sfxBird(){
+  tone("sparrow","sine",2500,.06,.03,3500,0);
+}
+
+// Play distant car horn.
+function sfxHorn(){
+  tone("car horn 350","sine",350,.20,.025,null,0);
+  tone("car horn 440","sine",440,.20,.025,null,.20);
+}
+
+// Play vendor call hum.
+function sfxVendor(){
+  logSfx("vendor chai");
+  if(!audioCtx||audioCtx.state!=="running"){return;}
+  const now=audioCtx.currentTime,o=audioCtx.createOscillator(),f=audioCtx.createBiquadFilter(),g=audioCtx.createGain();
+  o.type="sawtooth";o.frequency.setValueAtTime(200,now);o.frequency.linearRampToValueAtTime(230,now+.45);o.frequency.linearRampToValueAtTime(190,now+.9);
+  f.type="lowpass";f.frequency.value=350;g.gain.setValueAtTime(.02,now);g.gain.exponentialRampToValueAtTime(.0001,now+.9);
+  o.connect(f);f.connect(g);g.connect(audioCtx.destination);
+  o.onended=function vendorEnded(){o.disconnect();f.disconnect();g.disconnect();};
+  o.start(now);o.stop(now+.9);
+}
+
+// Play kids shouting tones.
+function sfxKids(){
+  tone("kids 300","triangle",300,.10,.02,380,0);
+  tone("kids 500","triangle",500,.10,.02,620,.11);
+}
+
+// Play temple bell.
+function sfxBell(){
+  tone("temple bell","sine",528,2,.02,null,0);
+}
+
+// Start continuous mild wind.
+function startWind(){
+  if(!audioCtx||audioCtx.state!=="running"||ambient.wind||paused||mode!=="playing"){return;}
+  logSfx("mild wind start");
+  const s=audioCtx.createBufferSource(),f=audioCtx.createBiquadFilter(),g=audioCtx.createGain();
+  s.buffer=noiseBuffer(2,true);s.loop=true;f.type="lowpass";f.frequency.value=300;g.gain.value=.02;
+  s.connect(f);f.connect(g);g.connect(audioCtx.destination);s.start();
+  ambient.wind=s;ambient.filter=f;ambient.gain=g;
+}
+
+// Stop continuous wind.
+function stopWind(){
+  if(ambient.wind){ambient.wind.stop();ambient.wind.disconnect();ambient.wind=null;}
+  if(ambient.filter){ambient.filter.disconnect();ambient.filter=null;}
+  if(ambient.gain){ambient.gain.disconnect();ambient.gain=null;}
+}
+
+// Schedule ambient RAF clocks.
+function scheduleAmbient(){
+  ambient.bird=clock+2+Math.random()*3;
+  ambient.horn=clock+15+Math.random()*25;
+  ambient.vendor=clock+20+Math.random()*30;
+  ambient.kids=clock+8+Math.random()*17;
+  ambient.bell=clock+60+Math.random()*60;
+}
+
+// Update ambient events from RAF time.
+function updateAmbient(){
+  if(clock>=ambient.bird){sfxBird();ambient.bird=clock+2+Math.random()*3;}
+  if(clock>=ambient.horn){sfxHorn();ambient.horn=clock+15+Math.random()*25;}
+  if(clock>=ambient.vendor){sfxVendor();ambient.vendor=clock+20+Math.random()*30;}
+  if(clock>=ambient.kids){sfxKids();ambient.kids=clock+8+Math.random()*17;}
+  if(clock>=ambient.bell){sfxBell();ambient.bell=clock+60+Math.random()*60;}
 }
 
 // Queue a canvas prompt.
-function pushPrompt(text,color,duration) {
-  promptQueue.push({text:text,color:color,timeLeft:duration,duration:duration});
+function prompt(text,color,size,duration){
+  prompts.push({text:text,color:color,fontSize:size,timeLeft:duration,duration:duration});
 }
 
-// Update prompt lifetimes.
-function updatePrompts(dt) {
-  for (let i=promptQueue.length-1;i>=0;i-=1) {
-    promptQueue[i].timeLeft -= dt;
-    if (promptQueue[i].timeLeft <= 0) {
-      promptQueue.splice(i,1);
-    }
+// Update prompt timers.
+function updatePrompts(dt){
+  for(let i=prompts.length-1;i>=0;i-=1){
+    prompts[i].timeLeft-=dt;
+    if(prompts[i].timeLeft<=0){prompts.splice(i,1);}
   }
+  if(stateText){stateText.timeLeft-=dt;if(stateText.timeLeft<=0){stateText=null;}}
 }
 
-// Apply DHEEL climb and risk.
-function doDheel() {
-  if (mode !== "playing" || paused) {
-    return;
-  }
-  player.vy -= 190;
-  tension = Math.min(1,tension+0.035);
-  soundDheel();
-  pushPrompt("DHEEL","#75bfff",0.7);
+// Apply DHEEL tap.
+function doDheel(){
+  if(mode!=="playing"||paused){return;}
+  player.vy=-180;tension=clamp(tension-.04,0,1);sfxDheel();prompt("DHEEL","#00BFFF",36,.7);
 }
 
-// Apply KHENCH dive and tension relief.
-function doKhench() {
-  if (mode !== "playing" || paused) {
-    return;
-  }
-  player.vy += 175;
-  tension = Math.max(0,tension-0.08);
-  soundKhench();
-  pushPrompt("KHENCH","#ff8585",0.7);
+// Apply KHENCH tap.
+function doKhench(){
+  if(mode!=="playing"||paused){return;}
+  player.vy=180;tension=clamp(tension-.06,0,1);sfxKhench();prompt("KHENCH","#FF3B30",36,.7);
 }
 
-// Toggle pause and ambience.
-function togglePause() {
-  if (mode !== "playing") {
-    return;
-  }
-  paused = !paused;
-  if (paused) {
-    stopAmbient();
-  } else {
-    startAmbient();
-  }
+// Toggle pause and ambient.
+function togglePause(){
+  if(mode!=="playing"){return;}
+  paused=!paused;
+  if(paused){stopWind();}else{startWind();scheduleAmbient();}
 }
 
-// Convert pointer coordinates to canvas buffer.
-function pointerPoint(event) {
-  const rect = canvas.getBoundingClientRect();
-  return {x:(event.clientX-rect.left)*(canvas.width/rect.width),y:(event.clientY-rect.top)*(canvas.height/rect.height)};
+// Convert pointer to canvas pixels.
+function pointerPoint(e){
+  const r=canvas.getBoundingClientRect();
+  return{x:(e.clientX-r.left)*(canvas.width/r.width),y:(e.clientY-r.top)*(canvas.height/r.height)};
 }
 
-// Test a rectangular hit zone.
-function pointInZone(point,zone) {
-  return point.x>=zone.x && point.x<=zone.x+zone.w && point.y>=zone.y && point.y<=zone.y+zone.h;
+// Test rectangle hit.
+function hit(p,z){
+  return p.x>=z.x&&p.x<=z.x+z.w&&p.y>=z.y&&p.y<=z.y+z.h;
 }
 
-// Resolve pointer hit.
-function hitName(point) {
-  if (mode==="home" && pointInZone(point,zones.play)) {
-    return "play";
+// Handle the sole pointer interaction.
+function handlePointerDown(e){
+  if(!audioCtx){
+    const AudioConstructor=window.AudioContext||window.webkitAudioContext;
+    if(AudioConstructor){audioCtx=new AudioConstructor();}
   }
-  if (mode==="playing" && pointInZone(point,zones.pause)) {
-    return "pause";
-  }
-  if (mode==="playing" && !paused && pointInZone(point,zones.dheel)) {
-    return "dheel";
-  }
-  if (mode==="playing" && !paused && pointInZone(point,zones.khench)) {
-    return "khench";
-  }
-  return "none";
+  if(audioCtx&&audioCtx.state==="suspended"){audioCtx.resume();}
+  console.log("AUDIO: ctx state = "+(audioCtx?audioCtx.state:"unavailable"));
+  e.preventDefault();
+  const p=pointerPoint(e);
+  if(mode==="home"&&hit(p,layout.play)){startGame();return;}
+  if(mode!=="playing"){return;}
+  if(hit(p,layout.pause)){togglePause();return;}
+  if(!paused&&hit(p,layout.dheel)){doDheel();return;}
+  if(!paused&&hit(p,layout.khench)){doKhench();}
 }
 
-// Handle unified pointer input and audio unlock.
-function handlePointerDown(event) {
-  event.preventDefault();
-  unlockAudio();
-  const point = pointerPoint(event);
-  const hit = hitName(point);
-  console.log("pointerdown at "+Math.round(point.x)+", "+Math.round(point.y)+", hit: "+hit);
-  if (hit==="play") {
-    startGame();
-  } else if (hit==="pause") {
-    togglePause();
-  } else if (hit==="dheel") {
-    doDheel();
-  } else if (hit==="khench") {
-    doKhench();
-  }
+// Decay vertical velocity toward zero.
+function decayVy(dt){
+  const d=120*dt;
+  if(player.vy>0){player.vy=Math.max(0,player.vy-d);}
+  else if(player.vy<0){player.vy=Math.min(0,player.vy+d);}
 }
 
-// Update strong horizontal player flight.
-function updatePlayer(dt) {
-  const minX = W()*0.15;
-  const maxX = W()*0.85;
-  if (player.x<=minX) {
-    player.direction = 1;
-  }
-  if (player.x>=maxX) {
-    player.direction = -1;
-  }
-  const speed = 95+35*(0.5+0.5*Math.sin(flightTime*0.55));
-  const target = player.direction*speed;
-  player.vx += (target-player.vx)*(1-Math.exp(-dt*3));
-  if (Math.abs(player.vx)<60) {
-    player.vx = 60*(player.vx<0?-1:1);
-  }
-  player.vy *= Math.pow(0.34,dt);
-  player.x += player.vx*dt;
-  player.y += player.vy*dt;
-  player.x = Math.max(W()*0.14,Math.min(W()*0.86,player.x));
-  player.y = Math.max(H()*0.12,Math.min(H()*0.68,player.y));
-  player.rotation = Math.atan2(player.vy,player.vx);
+// Update player physics.
+function updatePlayer(dt){
+  if(player.x<=W()*.15){player.direction=1;}
+  else if(player.x>=W()*.85){player.direction=-1;}
+  const magnitude=60+20*Math.abs(Math.sin(clock*.62));
+  const target=player.direction*magnitude;
+  player.vx+=(target-player.vx)*(1-Math.exp(-dt*3.5));
+  decayVy(dt);
+  player.x=clamp(player.x+player.vx*dt,W()*.15,W()*.85);
+  player.y=clamp(player.y+player.vy*dt,H()*.15,H()*.60);
+  player.rotation=Math.atan2(player.vy,player.vx);
 }
 
-// Start an AI attack.
-function beginAIDive() {
-  ai.state = "dive";
-  ai.diveTime = 0;
-  ai.trail.length = 0;
+// Begin AI dive.
+function beginDive(){
+  ai.state="dive";ai.diveTime=0;ai.hit=false;
 }
 
-// Update AI neutral/dive/return state machine.
-function updateAI(dt) {
-  ai.diveTime += dt;
-  if (ai.state==="neutral" && flightTime>=ai.nextDiveAt) {
-    beginAIDive();
+// Update AI state and physics.
+function updateAI(dt){
+  if(ai.state==="neutral"&&clock>=ai.nextDive){beginDive();}
+  if(ai.state==="dive"){
+    ai.diveTime+=dt;
+    const dx=player.x-ai.x,dy=player.y-ai.y,d=Math.max(1,Math.hypot(dx,dy));
+    ai.vx=dx/d*180;ai.vy=dy/d*180;
+    if(d<50&&!ai.hit){tension=clamp(tension+.30,0,1);ai.hit=true;}
+    if(ai.diveTime>=1.2){ai.state="return";}
+  }else{
+    const nx=W()*.72,ny=H()*.30,dx=nx-ai.x,dy=ny-ai.y,d=Math.max(1,Math.hypot(dx,dy));
+    ai.vx=50*Math.sin(clock*.42+1.4)+(dx/d)*35;
+    ai.vy=30*Math.sin(clock*.70)+(dy/d)*25;
+    if(ai.state==="return"&&d<28){ai.state="neutral";ai.nextDive=clock+10+Math.random()*5;}
   }
-  let targetX = W()*0.72;
-  let targetY = H()*0.30;
-  let speed = 80;
-  if (ai.state==="dive") {
-    targetX = player.x;
-    targetY = player.y;
-    speed = 190;
-    ai.trail.push({x:ai.x,y:ai.y,life:0.28});
-    if (ai.trail.length>8) {
-      ai.trail.shift();
-    }
-    if (Math.hypot(ai.x-player.x,ai.y-player.y)<40) {
-      tension = Math.min(1,tension+0.3);
-      ai.tension = Math.min(1,ai.tension+0.2);
-      ai.state = "return";
-    } else if (ai.diveTime>2.4) {
-      ai.state = "return";
-    }
-  } else if (ai.state==="return" && Math.hypot(ai.x-targetX,ai.y-targetY)<30) {
-    ai.state = "neutral";
-    ai.nextDiveAt = flightTime+8+Math.random()*6;
-  }
-  const dx = targetX-ai.x;
-  const dy = targetY-ai.y;
-  const length = Math.max(1,Math.hypot(dx,dy));
-  ai.vx = dx/length*speed;
-  ai.vy = dy/length*speed;
-  ai.x += ai.vx*dt;
-  ai.y += ai.vy*dt;
-  ai.rotation = Math.atan2(ai.vy,ai.vx);
-  for (let i=ai.trail.length-1;i>=0;i-=1) {
-    ai.trail[i].life -= dt;
-    if (ai.trail[i].life<=0) {
-      ai.trail.splice(i,1);
-    }
-  }
+  ai.x=clamp(ai.x+ai.vx*dt,W()*.12,W()*.88);
+  ai.y=clamp(ai.y+ai.vy*dt,H()*.15,H()*.58);
+  ai.rotation=Math.atan2(ai.vy,ai.vx);
 }
 
-// Update tension from altitude and passive pressure.
-function updateTension(dt) {
-  const ratio = player.y/H();
-  tension += 0.02*dt;
-  if (ratio<0.25) {
-    tension += 0.11*dt;
-  } else if (ratio>0.60) {
-    tension += 0.10*dt;
-  } else if (ratio>=0.25 && ratio<=0.55) {
-    tension -= 0.07*dt;
-  }
-  tension = Math.max(0,Math.min(1,tension));
-  const nextZone = tension>=0.85 ? "danger" : tension>=0.60 ? "warning" : "safe";
-  if (nextZone!==tensionZone) {
-    if (nextZone==="warning") {
-      pushPrompt("SAVADHAN","#FFC107",1.0);
-    }
-    if (nextZone==="danger") {
-      pushPrompt("KHATRA","#F44336",1.2);
-    }
-    tensionZone = nextZone;
-  }
-  if (tension>=1) {
-    cutPlayerKite();
-  }
+// Cut and reset player without resetting timer.
+function cutKite(){
+  sfxKatGai();sfxFail();prompt("KAT GAI!","#FF0000",56,1.5);
+  stateText={text:"KAT GAI!",color:"#FF0000",fontSize:56,timeLeft:1.5};
+  tension=.25;zone="green";resetPlayer();
 }
 
-// Reset after a cut while preserving level timer.
-function cutPlayerKite() {
-  soundKatGai();
-  soundLevelFail();
-  pushPrompt("KAT GAI!","#ff3030",1.5);
-  tension = 0.3;
-  tensionZone = "safe";
-  player.x = W()*0.50;
-  player.y = H()*0.38;
-  player.vx = 105;
-  player.vy = 0;
+// Update danger tension.
+function updateTension(dt){
+  const y=player.y/H();
+  tension+=.015*dt;
+  if(y<.28){tension+=.35*dt;}
+  else if(y>.52){tension+=.30*dt;}
+  else{tension-=.20*dt;}
+  tension=clamp(tension,0,1);
+  const next=tension>=.85?"red":tension>=.65?"yellow":"green";
+  if(next!==zone){
+    if(next==="yellow"){prompt("SAVADHAN","#FFD700",36,1);}
+    if(next==="red"){prompt("KHATRA","#FF4500",36,1.2);}
+    zone=next;
+  }
+  if(tension>=1){cutKite();}
 }
 
-// Complete and advance the level.
-function clearLevel() {
-  soundLevelClear();
-  pushPrompt("LEVEL CLEAR","#4CAF50",2.0);
-  currentLevel += 1;
-  levelTimeLeft = levelDuration(currentLevel);
-  tension = 0.3;
-  tensionZone = "safe";
-  resetKites();
+// Clear and advance level.
+function clearLevel(){
+  sfxClear();prompt("LEVEL CLEAR","#00FF00",56,2);
+  stateText={text:"LEVEL CLEAR",color:"#00FF00",fontSize:56,timeLeft:2};
+  level+=1;timer=levelDuration(level);tension=.25;zone="green";resetPlayer();resetAI();
 }
 
-// Update RAF-owned audio timers.
-function updateAudioTimers() {
-  if (flightTime>=nextBirdAt) {
-    soundBird();
-    nextBirdAt = flightTime+3+Math.random()*6;
-  }
-  if (tensionZone==="warning" && flightTime>=warningPulseAt) {
-    soundWarningPulse();
-    warningPulseAt = flightTime+0.8;
-  }
-  if (tensionZone==="danger" && flightTime>=dangerPulseAt) {
-    soundDangerPulse();
-    dangerPulseAt = flightTime+0.4;
-  }
+// Update warning audio pulses.
+function updateWarningAudio(dt){
+  warningClock-=dt;dangerClock-=dt;
+  if(zone==="yellow"&&warningClock<=0){sfxYellow();warningClock=.8;}
+  if(zone==="red"&&dangerClock<=0){sfxRed();dangerClock=.4;}
 }
 
-// Advance gameplay.
-function update(dt) {
+// Update game state.
+function update(dt){
   updatePrompts(dt);
-  if (mode!=="playing" || paused) {
-    return;
-  }
-  elapsed += dt;
-  flightTime += dt;
-  levelTimeLeft -= dt;
-  updatePlayer(dt);
-  updateAI(dt);
-  updateTension(dt);
-  updateAudioTimers();
-  if (levelTimeLeft<=0) {
-    clearLevel();
-  }
+  if(mode!=="playing"||paused){return;}
+  clock+=dt;timer-=dt;
+  updatePlayer(dt);updateAI(dt);updateTension(dt);updateWarningAudio(dt);updateAmbient();
+  if(timer<=0){clearLevel();}
 }
 
-// Draw warm scene fallback.
-function drawFallback() {
-  ctx.fillStyle = "#c9784a";
-  ctx.fillRect(0,0,W(),H());
-  ctx.fillStyle = "#fff2d2";
-  ctx.font = "700 16px system-ui";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(assetFailed?"Scene unavailable":"Loading scene…",W()/2,H()/2);
+// Draw warm fallback.
+function drawFallback(){
+  ctx.fillStyle="#6B3A2E";ctx.fillRect(0,0,W(),H());
+  ctx.fillStyle="#fff";ctx.font="700 16px Arial";ctx.textAlign="center";ctx.textBaseline="middle";
+  ctx.fillText(assetError?"Scene unavailable":"Loading scene…",W()/2,H()/2);
 }
 
-// Draw scene preserving aspect ratio.
-function drawScene() {
-  if (!assetsReady) {
-    drawFallback();
-    return;
-  }
-  const scale = Math.min(W()/sceneImage.naturalWidth,H()/sceneImage.naturalHeight);
-  const dw = sceneImage.naturalWidth*scale;
-  const dh = sceneImage.naturalHeight*scale;
-  ctx.fillStyle = "#6f3f39";
-  ctx.fillRect(0,0,W(),H());
+// Draw scene letterboxed.
+function drawScene(){
+  if(!assetsReady){drawFallback();return;}
+  ctx.fillStyle="#6B3A2E";ctx.fillRect(0,0,W(),H());
+  const s=Math.min(W()/sceneImage.naturalWidth,H()/sceneImage.naturalHeight),dw=sceneImage.naturalWidth*s,dh=sceneImage.naturalHeight*s;
   ctx.drawImage(sceneImage,(W()-dw)/2,(H()-dh)/2,dw,dh);
 }
 
-// Draw canvas home.
-function drawHome() {
-  ctx.fillStyle = "rgba(23,32,68,0.72)";
-  ctx.fillRect(0,0,W(),H());
-  ctx.fillStyle = "#fff2d2";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = "900 "+Math.max(34,Math.min(64,W()*0.12))+"px system-ui";
-  ctx.fillText("PATANG",W()/2,H()*0.38);
-  ctx.font = "600 16px system-ui";
-  ctx.fillText("Rooftop Kite Duel",W()/2,H()*0.46);
-  ctx.fillStyle = assetsReady?"#d89424":"#7d725f";
-  ctx.beginPath();
-  ctx.roundRect(zones.play.x,zones.play.y,zones.play.w,zones.play.h,18);
-  ctx.fill();
-  ctx.fillStyle = "#172044";
-  ctx.font = "900 20px system-ui";
-  ctx.fillText(assetsReady?"PLAY":"LOADING…",zones.play.x+zones.play.w/2,zones.play.y+zones.play.h/2);
+// Draw dark hairline string.
+function drawString(){
+  ctx.save();ctx.lineWidth=layout.stringWidth;ctx.strokeStyle="rgba(30, 15, 5, 0.85)";ctx.shadowBlur=0;
+  ctx.beginPath();ctx.moveTo(layout.handX,layout.handY);ctx.lineTo(player.x,player.y);ctx.stroke();ctx.restore();
 }
 
-// Draw player string from painted hand.
-function drawString() {
-  ctx.save();
-  ctx.strokeStyle = "rgba(255, 240, 210, 0.55)";
-  ctx.lineWidth = STRING_WIDTH;
-  ctx.shadowBlur = 0;
-  ctx.beginPath();
-  ctx.moveTo(W()*0.435,H()*0.735);
-  ctx.lineTo(player.x,player.y);
-  ctx.stroke();
-  ctx.restore();
-}
-
-// Draw AI motion trail only during attack.
-function drawAITrail() {
-  if (ai.state!=="dive") {
-    return;
+// Draw shared diamond kite.
+function drawKite(x,y,size,rotation,fillColor,outlineColor,glow){
+  ctx.save();ctx.translate(x,y);ctx.rotate(rotation);
+  if(glow){
+    const g=ctx.createRadialGradient(0,0,size*.25,0,0,size+20);
+    g.addColorStop(0,"rgba(255,20,147,.32)");g.addColorStop(1,"rgba(255,20,147,0)");
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,size+20,0,Math.PI*2);ctx.fill();
   }
-  ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,0.28)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ai.trail.forEach((point,index) => {
-    if (index===0) {
-      ctx.moveTo(point.x,point.y);
-    } else {
-      ctx.lineTo(point.x,point.y);
-    }
-  });
-  ctx.stroke();
-  ctx.restore();
+  ctx.beginPath();ctx.moveTo(0,-size);ctx.lineTo(size*.72,0);ctx.lineTo(0,size);ctx.lineTo(-size*.72,0);ctx.closePath();
+  ctx.fillStyle=fillColor;ctx.fill();ctx.strokeStyle=outlineColor;ctx.lineWidth=glow?3:2;ctx.stroke();ctx.restore();
 }
 
-// Draw one rotated kite.
-function drawKite(kite,size,playerOwned) {
-  ctx.save();
-  ctx.translate(kite.x,kite.y);
-  ctx.rotate(kite.rotation);
-  if (playerOwned) {
-    ctx.shadowColor = "#ff2b9d";
-    ctx.shadowBlur = 12;
-  } else if (ai.state==="dive") {
-    ctx.shadowColor = "#ffffff";
-    ctx.shadowBlur = 8;
-  }
-  ctx.beginPath();
-  ctx.moveTo(0,-size);
-  ctx.lineTo(size*0.72,0);
-  ctx.lineTo(0,size);
-  ctx.lineTo(-size*0.72,0);
-  ctx.closePath();
-  ctx.fillStyle = playerOwned?"#ff2b9d":"#6b36a8";
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = playerOwned?"#fff0fa":"#55c978";
-  ctx.lineWidth = playerOwned?3:2;
-  ctx.stroke();
-  ctx.restore();
+// Draw AI dive ghost copies.
+function drawAIGhosts(size){
+  if(ai.state!=="dive"){return;}
+  const speed=Math.max(1,Math.hypot(ai.vx,ai.vy)),ux=ai.vx/speed,uy=ai.vy/speed;
+  ctx.save();ctx.globalAlpha=.5;drawKite(ai.x-ux*28,ai.y-uy*28,size,ai.rotation,"#7B2FBE","#4CAF50",false);
+  ctx.globalAlpha=.8;drawKite(ai.x-ux*14,ai.y-uy*14,size,ai.rotation,"#7B2FBE","#4CAF50",false);ctx.restore();
 }
 
-// Draw duel in correct layering order.
-function drawDuel() {
-  drawString();
-  drawAITrail();
-  const size = Math.max(25,Math.min(48,W()*0.065));
-  drawKite(player,size,true);
-  drawKite(ai,size*0.9,false);
+// Draw AI kite.
+function drawAI(){
+  const size=W()*.055;drawAIGhosts(size);drawKite(ai.x,ai.y,size,ai.rotation,"#7B2FBE","#4CAF50",false);
+}
+
+// Draw player kite.
+function drawPlayer(){
+  drawKite(player.x,player.y,W()*.07,player.rotation,"#FF1493","#FFFFFF",true);
 }
 
 // Draw HUD pill.
-function drawPill(x,y,width,height,text) {
-  ctx.fillStyle = "rgba(23,32,68,0.87)";
-  ctx.beginPath();
-  ctx.roundRect(x,y,width,height,height/2);
-  ctx.fill();
-  ctx.fillStyle = "#fff2d2";
-  ctx.font = "700 13px system-ui";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text,x+width/2,y+height/2);
+function pill(x,y,w,text){
+  ctx.fillStyle="#1a2340";ctx.beginPath();ctx.roundRect(x,y,w,40,20);ctx.fill();
+  ctx.fillStyle="#fff";ctx.font="700 15px Arial";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(text,x+w/2,y+20);
 }
 
-// Draw action button.
-function drawActionButton(zone,fill,arrow,label) {
-  const cx = zone.x+zone.w/2;
-  const cy = zone.y+zone.h/2;
-  ctx.save();
-  ctx.translate(cx,cy);
-  ctx.rotate(Math.PI/4);
-  ctx.fillStyle = fill;
-  ctx.fillRect(-29,-29,58,58);
-  ctx.rotate(-Math.PI/4);
-  ctx.fillStyle = "#fff";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = "900 18px system-ui";
-  ctx.fillText(arrow,0,-8);
-  ctx.font = "800 9px system-ui";
-  ctx.fillText(label,0,11);
-  ctx.restore();
+// Format timer.
+function formatTime(seconds){
+  const n=Math.max(0,Math.ceil(seconds)),m=Math.floor(n/60),s=n%60;
+  return String(m).padStart(2,"0")+":"+String(s).padStart(2,"0");
+}
+
+// Draw top HUD row.
+function drawHUD(){
+  pill(12,12,72,"L"+level);pill(W()/2-50,12,100,formatTime(timer));
+  ctx.fillStyle="#1a2340";ctx.beginPath();ctx.roundRect(layout.pause.x,layout.pause.y,40,40,12);ctx.fill();
+  ctx.fillStyle="#fff";ctx.fillRect(layout.pause.x+12,layout.pause.y+10,5,20);ctx.fillRect(layout.pause.x+23,layout.pause.y+10,5,20);
 }
 
 // Draw danger bar.
-function drawDangerBar() {
-  const y = H()*0.09;
-  const width = W();
-  ctx.fillStyle = "#4CAF50";
-  ctx.fillRect(0,y,width*0.60,8);
-  ctx.fillStyle = "#FFC107";
-  ctx.fillRect(width*0.60,y,width*0.25,8);
-  ctx.fillStyle = "#F44336";
-  ctx.fillRect(width*0.85,y,width*0.15,8);
-  const markerX = tension*width;
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(markerX-1,y-2,2,12);
+function drawDangerBar(){
+  const y=H()*.115;
+  ctx.fillStyle="#4CAF50";ctx.fillRect(0,y,W()*.65,10);
+  ctx.fillStyle="#FFC107";ctx.fillRect(W()*.65,y,W()*.20,10);
+  ctx.fillStyle="#F44336";ctx.fillRect(W()*.85,y,W()*.15,10);
+  ctx.fillStyle="#fff";ctx.fillRect(clamp(tension*W()-1.5,0,W()-3),y-3,3,16);
 }
 
-// Draw gameplay HUD.
-function drawHUD() {
-  drawPill(12,16,82,36,"L"+currentLevel);
-  drawPill(W()/2-52,16,104,36,String(Math.max(0,Math.ceil(levelTimeLeft)))+"s");
-  ctx.fillStyle = "rgba(23,32,68,0.87)";
-  ctx.beginPath();
-  ctx.roundRect(zones.pause.x,zones.pause.y,zones.pause.w,zones.pause.h,16);
-  ctx.fill();
-  ctx.fillStyle = "#fff";
-  ctx.font = "800 16px system-ui";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(paused?"▶":"Ⅱ",zones.pause.x+zones.pause.w/2,zones.pause.y+zones.pause.h/2);
-  drawDangerBar();
-  drawActionButton(zones.dheel,"#2879d8","↑","DHEEL");
-  drawActionButton(zones.khench,"#d94444","↓","KHENCH");
+// Draw high-contrast prompts.
+function drawPrompts(){
+  for(let i=0;i<prompts.length;i+=1){
+    const p=prompts[i],alpha=clamp(p.timeLeft/Math.min(.35,p.duration),0,1);
+    ctx.save();ctx.globalAlpha=alpha;ctx.font="900 "+p.fontSize+"px 'Arial Black',Arial,sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
+    ctx.lineWidth=6;ctx.strokeStyle="#000";ctx.shadowColor="#000";ctx.shadowBlur=12;ctx.strokeText(p.text,W()*.5,H()*.35+i*42);
+    ctx.fillStyle=p.color;ctx.fillText(p.text,W()*.5,H()*.35+i*42);ctx.restore();
+  }
 }
 
-// Draw queued prompts with fade.
-function drawPrompts() {
-  promptQueue.forEach((prompt,index) => {
-    const alpha = Math.max(0,Math.min(1,prompt.timeLeft/Math.min(0.35,prompt.duration)));
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = prompt.color;
-    ctx.font = "900 32px system-ui";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(prompt.text,W()/2,H()*0.35+index*36);
-    ctx.restore();
-  });
+// Draw one diamond control.
+function control(cx,cy,fill,arrow,label){
+  ctx.save();ctx.translate(cx,cy);ctx.rotate(Math.PI/4);ctx.fillStyle=fill;ctx.fillRect(-45,-45,90,90);ctx.rotate(-Math.PI/4);
+  ctx.fillStyle="#fff";ctx.textAlign="center";ctx.textBaseline="middle";ctx.font="900 25px Arial";ctx.fillText(arrow,0,-11);
+  ctx.font="900 11px Arial";ctx.fillText(label,0,15);ctx.restore();
 }
 
-// Render frame with clearRect first.
-function draw() {
+// Draw bottom controls.
+function drawControls(){
+  control(W()*.22,H()*.86,"#2196F3","↑","DHEEL");
+  control(W()*.50,H()*.86,"#E53935","↓","KHENCH");
+}
+
+// Draw active game-state text.
+function drawStateText(){
+  if(!stateText){return;}
+  ctx.save();ctx.globalAlpha=clamp(stateText.timeLeft/.35,0,1);ctx.font="900 "+stateText.fontSize+"px 'Arial Black',Arial,sans-serif";
+  ctx.textAlign="center";ctx.textBaseline="middle";ctx.lineWidth=7;ctx.strokeStyle="#000";ctx.shadowColor="#000";ctx.shadowBlur=12;
+  ctx.strokeText(stateText.text,W()*.5,H()*.47);ctx.fillStyle=stateText.color;ctx.fillText(stateText.text,W()*.5,H()*.47);ctx.restore();
+}
+
+// Draw canvas home.
+function drawHome(){
+  ctx.fillStyle="rgba(26,35,64,.72)";ctx.fillRect(0,0,W(),H());ctx.fillStyle="#fff";ctx.textAlign="center";ctx.textBaseline="middle";
+  ctx.font="900 52px 'Arial Black',Arial";ctx.fillText("PATANG",W()*.5,H()*.38);
+  ctx.fillStyle=assetsReady?"#FFC107":"#777";ctx.beginPath();ctx.roundRect(layout.play.x,layout.play.y,layout.play.w,layout.play.h,20);ctx.fill();
+  ctx.fillStyle="#1a2340";ctx.font="900 20px Arial";ctx.fillText(assetsReady?"PLAY":"LOADING…",W()*.5,layout.play.y+layout.play.h/2);
+}
+
+// Render exact mandated stack.
+function drawFrame(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   drawScene();
-  if (mode==="home") {
-    drawHome();
-    return;
-  }
-  if (!assetsReady) {
-    return;
-  }
-  drawDuel();
+  if(mode==="home"){drawHome();return;}
+  drawString();
+  drawAI();
+  drawPlayer();
   drawHUD();
+  drawDangerBar();
   drawPrompts();
+  drawControls();
+  drawStateText();
 }
 
-// RAF game loop.
-function gameLoop(now) {
+// Main RAF loop.
+function gameLoop(now){
   pollCanvasSize();
-  const dt = Math.min(0.033,(now-lastTime)/1000||0);
-  lastTime = now;
-  update(dt);
-  draw();
-  requestAnimationFrame(gameLoop);
+  const dt=Math.min(.033,(now-last)/1000||0);
+  last=now;update(dt);drawFrame();requestAnimationFrame(gameLoop);
 }
 
-// Bind unified pointer input.
-function bindEvents() {
+// Pause when page is hidden.
+function visibilityChanged(){
+  if(document.hidden&&mode==="playing"&&!paused){paused=true;stopWind();}
+}
+
+// Bind canvas pointer input.
+function bindEvents(){
   canvas.addEventListener("pointerdown",handlePointerDown,{passive:false});
-  document.addEventListener("visibilitychange",() => {
-    if (document.hidden && mode==="playing") {
-      paused = true;
-      stopAmbient();
-    }
-  });
+  document.addEventListener("visibilitychange",visibilityChanged);
 }
 
-// Initialize game.
-function init() {
-  disableDomPanels();
-  resizeCanvas();
-  loadScene();
-  bindEvents();
-  requestAnimationFrame(gameLoop);
+// Initialize rebuilt game.
+function init(){
+  hideLegacyDom();resizeCanvas();loadScene();bindEvents();requestAnimationFrame(gameLoop);
 }
 
 init();
