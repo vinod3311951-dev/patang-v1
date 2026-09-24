@@ -78,6 +78,7 @@ let audioInitialized = false;
 let dheelZone = null;
 let khenchZone = null;
 let pauseZone = null;
+let pauseHomeZone = null;
 let homePlayZone = null;
 let homeLevelsZone = null;
 
@@ -249,7 +250,7 @@ function initAudio() {
   audioManjaGaya.playbackRate = 0.55;
   audioManjaGaya.preload = "auto";
 
-  aiSparrowTimer = 4 + Math.random() * 5;
+  aiSparrowTimer = 0.8;
   aiCrowTimer = 12 + Math.random() * 13;
 
   try {
@@ -287,7 +288,7 @@ function scheduleAmbient(dt) {
       audioSparrow.currentTime = 0;
       audioSparrow.play().catch(() => {});
     } catch (e) {}
-    aiSparrowTimer = 8 + Math.random() * 10;
+    aiSparrowTimer = 4 + Math.random() * 5;
   }
 }
 
@@ -331,6 +332,8 @@ function recomputeLayout() {
     w: 0.10 * W + 16,
     h: 0.06 * H + 16
   };
+
+  pauseHomeZone = { x: 0.29 * W, y: 0.54 * H, w: 0.42 * W, h: 0.07 * H };
 
   homePlayZone = {
     x: 0.5 * W - 110,
@@ -453,7 +456,10 @@ function handlePointerDown(event) {
     return;
   }
 
-  if (paused) return;
+  if (paused) {
+    if (inZone(x, y, pauseHomeZone)) { paused = false; transitionState("home"); if (audioWater) audioWater.pause(); }
+    return;
+  }
 
   if (inZone(x, y, dheelZone)) {
     // DHEEL: loose line -> kite surges upward and outward.
@@ -534,7 +540,7 @@ function resetLevel(n) {
   ai.vx = 0;
   ai.vy = 0;
 
-  // Conflict starts quickly in a nine-second round, but never instantly.
+  // Conflict starts quickly in a 15-second round, but never instantly.
   ai.huntTimer = 1.8;
   ai.retreatTimer = 0;
   manja = 0.52;
@@ -746,9 +752,9 @@ function checkStringCrossing(dt) {
 
   // AI can genuinely win from level 1, and becomes progressively tougher.
   const aiPower =
-    0.54 +
-    difficulty * 0.30 +
-    Math.random() * 0.22;
+    0.48 +
+    difficulty * 0.34 +
+    Math.random() * 0.30;
 
   if (playerPower >= aiPower) {
     cutAI();
@@ -821,8 +827,8 @@ function updatePlaying(dt) {
 
   if (levelTimeLeft <= 0) {
     levelTimeLeft = 0;
-    // No passive win: surviving without winning the conflict is a retry.
-    beginLevelFail(playerActionScore === 0 ? "TAKE CONTROL!" : "TIME OUT");
+    // Resolve every full 15-second round as a real contest; never show TAKE CONTROL.
+    beginKatching(Math.random() < (playerActionScore === 0 ? 0.58 : 0.50) ? "player" : "ai");
     return;
   }
 
@@ -949,12 +955,13 @@ function render() {
     ctx.fillText("PAUSED", W * 0.5, H * 0.43);
 
     ctx.font = "bold 17px Arial, sans-serif";
-    ctx.fillText(
-      "Tap the pause button to resume",
-      W * 0.5,
-      H * 0.50,
-      W * 0.9
-    );
+    ctx.fillText("Tap pause to resume", W * 0.5, H * 0.50, W * 0.9);
+    const ph = pauseHomeZone;
+    roundedRectPath(ctx, ph.x, ph.y, ph.w, ph.h, 16);
+    ctx.fillStyle = "rgba(255,20,147,0.92)"; ctx.fill();
+    ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = "#FFFFFF"; ctx.font = 'bold 18px "Arial Black", Arial, sans-serif';
+    ctx.fillText("HOME", W * 0.5, ph.y + ph.h * 0.52);
 
     ctx.restore();
   }
@@ -1013,7 +1020,7 @@ function renderHome() {
   ctx.fillStyle = "#FFFAEB";
 
   ctx.strokeText(
-    "105 Kite Battles",
+    "A Kite Fight",
     W * 0.5,
     H * 0.42,
     W * 0.9
