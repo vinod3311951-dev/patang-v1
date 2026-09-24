@@ -76,6 +76,7 @@ let audioManjaGaya = null;
 
 let audioInitialized = false;
 let hindiVoice = null;
+let hindiVoiceReady = false;
 
 let dheelZone = null;
 let khenchZone = null;
@@ -217,7 +218,8 @@ function initAudio() {
   if ("speechSynthesis" in window) {
     const selectHindiVoice = () => {
       const voices = window.speechSynthesis.getVoices();
-      hindiVoice = voices.find(v => /^hi[-_]/i.test(v.lang)) || voices.find(v => /^hi$/i.test(v.lang)) || null;
+      hindiVoice = voices.find(v => /^hi[-_]/i.test(v.lang) && /india|hindi|google|microsoft/i.test(v.name)) || voices.find(v => /^hi[-_]/i.test(v.lang)) || voices.find(v => /^hi$/i.test(v.lang)) || null;
+      hindiVoiceReady = voices.length > 0;
     };
     selectHindiVoice();
     window.speechSynthesis.addEventListener("voiceschanged", selectHindiVoice);
@@ -290,8 +292,8 @@ function speakHindi(words) {
     const u = new SpeechSynthesisUtterance(words);
     u.lang = "hi-IN";
     if (hindiVoice) u.voice = hindiVoice;
-    u.rate = 1.04;
-    u.pitch = 1.12;
+    u.rate = 1.13;
+    u.pitch = 1.22;
     u.volume = 0.95;
     window.speechSynthesis.speak(u);
   } catch (e) {}
@@ -641,9 +643,8 @@ function beginKatching(who) {
 
   playPluck(1.6);
 
-  if (audioKatGai) {
-    try { audioKatGai.currentTime = 0; audioKatGai.play().catch(() => {}); } catch (e) {}
-  }
+  // One clean impact, then the matching spoken call. Avoid two pluck clips
+  // masking the voice on small phone speakers.
   speakHindi(call === "KAAT DI!" ? "काट दी!" : call === "KAT GAYI!" ? "कट गई!" : "मांझा गया!");
 }
 
@@ -687,14 +688,7 @@ function cutPlayer() {
 
   player.vy = Math.max(120, player.vy);
 
-  if (audioManjaGaya) {
-    try {
-      audioManjaGaya.currentTime = 0;
-      audioManjaGaya.play().catch(() => {});
-    } catch (e) {
-      // Optional losing sound.
-    }
-  }
+  // The losing impact and voice are triggered together by beginKatching.
 }
 
 // ============================================================
