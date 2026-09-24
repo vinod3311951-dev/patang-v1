@@ -1,5 +1,5 @@
-// PATANG_VERSION: 3.0.0
-// LAST_MAJOR_CHANGE: Real kite-vs-kite combat, string intersection detection, cut animation, level clear bumper, fail states, correct audio mapping, voice support
+// PATANG_VERSION: 3.1.0
+// LAST_MAJOR_CHANGE: Fixed freeze after KAT GAI, correct cut/clear/fail sounds, removed whoosh entirely
 "use strict";
 
 const canvas=document.getElementById("gameCanvas");
@@ -18,6 +18,10 @@ let assetsReady=false;
 let assetError=false;
 let mode="home";
 let paused=false;
+let gameState="playing";
+let cutResult="";
+let stateTimer=0;
+let failReason="";
 let level=1;
 let timer=60;
 let tension=.25;
@@ -195,6 +199,8 @@ function startLevel(){
   resetPlayer();
   resetAI();
   scheduleAmbient();
+  transitionState("playing");
+  startAmbience();
 }
 
 // Start gameplay.
@@ -205,7 +211,6 @@ function startGame(){
   mode="playing";
   paused=false;
   startLevel();
-  startAmbience();
 }
 
 // Initialize all HTML audio elements on the first user gesture.
@@ -221,13 +226,14 @@ function initAudio(){
   audioCrow=new Audio("public/assets/crow.mp3");
   audioCrow.volume=.40;
   audioPluck=new Audio("public/assets/pluck.mp3");
-  audioVoiceDheel=new Audio("public/assets/dheel.mp3");
+  // Optional voice files intentionally disabled in shipping audio routing.
+  audioVoiceDheel=null;
   audioVoiceDheel.volume=.7;
-  audioVoiceKhench=new Audio("public/assets/khench.mp3");
+  audioVoiceKhench=null;
   audioVoiceKhench.volume=.7;
-  audioVoiceKatGai=new Audio("public/assets/kat-gai.mp3");
+  audioVoiceKatGai=null;
   audioVoiceKatGai.volume=.7;
-  audioVoiceManjaGaya=new Audio("public/assets/manja-gaya.mp3");
+  audioVoiceManjaGaya=null;
   audioVoiceManjaGaya.volume=.7;
   audioWater.play().catch(function ignoreWaterPlay(){});
 }
@@ -272,7 +278,7 @@ function stopAmbience(){
 
 // Resume looping water.
 function startAmbience(){
-  if(audioWater&&!paused){
+  if(audioWater&&!paused&&gameState==="playing"){
     audioWater.play().catch(function ignoreWaterResume(){});
   }
 }
@@ -324,7 +330,6 @@ function doDheel(){
   player.vy=-220;
   tension=clamp(tension+.08,0,1);
   playPluck(1.30,.40);
-  playVoice(audioVoiceDheel);
   prompt("DHEEL","#00BFFF",26,.65);
 }
 
@@ -336,7 +341,6 @@ function doKhench(){
   player.vy=220;
   tension=clamp(tension-.06,0,1);
   playPluck(.80,.40);
-  playVoice(audioVoiceKhench);
   prompt("KHENCH","#FF3B30",26,.65);
 }
 
@@ -554,9 +558,7 @@ function cutAI(){
   looseString.owner="ai";
   looseString.endX=ai.x;
   looseString.endY=ai.y;
-  playPluck(1.60,.60);
-  playVoice(audioVoiceManjaGaya);
-  startBumper();
+  beginKatching("ai");
 }
 
 // Mark the player kite as cut and start the fail sequence.
@@ -573,9 +575,67 @@ function cutPlayer(){
   looseString.owner="player";
   looseString.endX=player.x;
   looseString.endY=player.y;
-  playPluck(.60,.50);
-  playVoice(audioVoiceKatGai);
-  startFail("cut");
+  beginKatching("player");
+}
+
+// Transition between explicit game states.
+function transitionState(nextState){
+  const oldState=gameState;
+  if(oldState===nextState){return;}
+  gameState=nextState;
+  console.log("State:",oldState,"->",nextState);
+  if(nextState==="playing"){startAmbience();scheduleAmbient();}else{stopAmbience();}
+}
+
+// Start the KAT GAI hold.
+function beginKatching(result){
+  cutResult=result;
+  stateTimer=1.5;
+  prompt("KAT GAI!","#FF2020",52,1.5);
+  playPluck(1.60,.60);
+  transitionState("katching");
+}
+
+// Start explicit level clear.
+function beginLevelClear(){
+  stateTimer=2;
+  startBumper();
+  transitionState("levelClear");
+}
+
+// Start explicit level fail.
+function beginLevelFail(reason){
+  failReason=reason;
+  stateTimer=1.5;
+  outcome.active=true;
+  outcome.type=reason;
+  outcome.time=2;
+  playPluck(.55,.50);
+  transitionState("levelFail");
+}
+
+// Update explicit RAF state timers.
+function updateStateMachine(dt){
+  if(gameState==="katching"){
+    stateTimer-=dt;
+    updateSpark(dt);
+    updateLooseString(dt);
+    if(ai.cut){updateAI(dt);}
+    if(player.cut){updatePlayer(dt);}
+    if(stateTimer<=0){if(cutResult==="ai"){beginLevelClear();}else{beginLevelFail("cut");}}
+    return;
+  }
+  if(gameState==="levelClear"){
+    stateTimer-=dt;
+    updateBumper(dt);
+    if(stateTimer<=0){bumper.active=false;level+=1;startLevel();}
+    return;
+  }
+  if(gameState==="levelFail"){
+    stateTimer-=dt;
+    outcome.time+=dt;
+    if(stateTimer<=0){outcome.active=false;startLevel();}
+  }
 }
 
 // Start the level-clear celebration bumper.
@@ -611,11 +671,7 @@ function updateBumper(dt){
     bumper.secondChime=true;
     playPluck(1.90,.60);
   }
-  if(bumper.time>=2){
-    bumper.active=false;
-    level+=1;
-    startLevel();
-  }
+
 }
 
 // Start a level-fail sequence.
@@ -664,23 +720,8 @@ function updateLooseString(dt){
 // Update active gameplay.
 function update(dt){
   updatePrompts(dt);
-  if(mode!=="playing"||paused){
-    return;
-  }
-  if(bumper.active){
-    updateBumper(dt);
-    updateSpark(dt);
-    updateLooseString(dt);
-    updateAI(dt);
-    return;
-  }
-  if(outcome.active){
-    updateFail(dt);
-    updateSpark(dt);
-    updateLooseString(dt);
-    updatePlayer(dt);
-    return;
-  }
+  if(mode!=="playing"||paused){return;}
+  if(gameState!=="playing"){updateStateMachine(dt);return;}
   clock+=dt;
   timer=Math.max(0,timer-dt);
   updatePlayer(dt);
@@ -691,7 +732,8 @@ function update(dt){
   updateLooseString(dt);
   checkStringCombat();
   if(timer<=0&&!player.cut&&!ai.cut){
-    startFail("timeout");
+    prompt("TIME OUT","#FF2020",52,1.5);
+    beginLevelFail("timeout");
   }
 }
 
@@ -1027,7 +1069,7 @@ function drawFail(){
   ctx.fillRect(0,0,W(),H());
   ctx.textAlign="center";
   ctx.textBaseline="middle";
-  if(outcome.time<1.5){
+  if(gameState==="katching"){
     ctx.font="900 52px 'Arial Black',Arial";
     ctx.lineWidth=5;
     ctx.strokeStyle="#000";
@@ -1080,7 +1122,7 @@ function drawFrame(){
   drawHUD();
   drawTensionBar();
   drawPrompts();
-  if(!bumper.active&&!outcome.active){
+  if(gameState==="playing"){
     drawControls();
   }
   drawBumper();
