@@ -1,5 +1,5 @@
-// PATANG_VERSION: 2.2.0
-// LAST_MAJOR_CHANGE: Portrait fill, kite clamp, KAT GAI once, small prompts, string fix, village ambience, rectangular buttons
+// PATANG_VERSION: 2.2.1
+// LAST_MAJOR_CHANGE: Fix v2.2 frozen RAF regression; harden RAF/layout/assets/audio guards
 "use strict";
 
 const canvas=document.getElementById("gameCanvas");
@@ -52,6 +52,7 @@ function pollCanvasSize(){
 
 // Recompute anchors and hit zones.
 function recomputeLayout(){
+  if(canvas.width===0||canvas.height===0){return;}
   const sceneAspect=1536/864;
   const canvasAspect=canvas.width/canvas.height;
   layout.handX=canvas.width*.47;
@@ -83,6 +84,7 @@ function recomputeLayout(){
 function sceneLoaded(){
   assetsReady=true;
   assetError=false;
+  console.log('scene loaded, assetsReady = true');
 }
 
 // Handle scene error.
@@ -156,6 +158,7 @@ function noiseBuffer(seconds,brown){
 
 // Play DHEEL whoosh.
 function sfxDheel(){
+  if(!audioCtx){return;}
   logSfx("dheel");
   if(!audioCtx||audioCtx.state!=="running"){return;}
   const now=audioCtx.currentTime,s=audioCtx.createBufferSource(),f=audioCtx.createBiquadFilter(),g=audioCtx.createGain();
@@ -168,17 +171,20 @@ function sfxDheel(){
 
 // Play KHENCH pluck.
 function sfxKhench(){
+  if(!audioCtx){return;}
   tone("khench","triangle",220,.10,.18,null,0);
 }
 
 // Play KAT GAI snap.
 function sfxKatGai(){
+  if(!audioCtx){return;}
   tone("kat gai 400","square",400,.06,.16,null,0);
   tone("kat gai 600","square",600,.06,.16,null,.065);
 }
 
 // Play MANJA GAYA twang.
 function sfxManja(){
+  if(!audioCtx){return;}
   logSfx("manja gaya");
   if(!audioCtx||audioCtx.state!=="running"){return;}
   const now=audioCtx.currentTime,o=audioCtx.createOscillator(),v=audioCtx.createOscillator(),vg=audioCtx.createGain(),g=audioCtx.createGain();
@@ -191,28 +197,33 @@ function sfxManja(){
 
 // Play yellow warning pulse.
 function sfxYellow(){
+  if(!audioCtx){return;}
   tone("yellow warning","sine",80,.15,.04,null,0);
 }
 
 // Play red danger pulse.
 function sfxRed(){
+  if(!audioCtx){return;}
   tone("red danger","sine",120,.12,.06,null,0);
 }
 
 // Play level-clear chime.
 function sfxClear(){
+  if(!audioCtx){return;}
   tone("level clear C5","sine",523,.20,.12,null,0);
   tone("level clear E5","sine",659,.20,.12,null,.21);
 }
 
 // Play level-fail descent.
 function sfxFail(){
+  if(!audioCtx){return;}
   tone("level fail G4","triangle",392,.20,.10,null,0);
   tone("level fail C4","triangle",261,.20,.10,null,.21);
 }
 
 // Play sparrow chirp.
 function sfxBird(){
+  if(!audioCtx){return;}
   tone("sparrow","sine",2500,.08,.04,3500,0);
 }
 
@@ -239,16 +250,19 @@ function noiseBurst(name,duration,gainValue,filterType,frequency){
 
 // Play dhobi-ghat washing slap.
 function sfxWash(){
+  if(!audioCtx){return;}
   noiseBurst("dhobi wash",.12,.025,"bandpass",700);
 }
 
 // Play dhobi-ghat splash.
 function sfxSplash(){
+  if(!audioCtx){return;}
   noiseBurst("water splash",.18,.02,"highpass",900);
 }
 
 // Play cow or bull neck bells.
 function sfxNeckBell(){
+  if(!audioCtx){return;}
   tone("neck bell 800","sine",800,.4,.03,null,0);
   tone("neck bell 1200","sine",1200,.4,.02,null,.01);
   tone("neck bell 1600","sine",1600,.4,.015,null,.02);
@@ -256,12 +270,14 @@ function sfxNeckBell(){
 
 // Play distant car horn.
 function sfxHorn(){
+  if(!audioCtx){return;}
   tone("car horn 350","sine",350,.2,.02,null,0);
   tone("car horn 440","sine",440,.2,.02,null,.2);
 }
 
 // Play muffled vendor call.
 function sfxVendor(){
+  if(!audioCtx){return;}
   logSfx("vendor call");
   if(!audioCtx||audioCtx.state!=="running"){return;}
   const now=audioCtx.currentTime;
@@ -284,12 +300,14 @@ function sfxVendor(){
 
 // Play kids shouting.
 function sfxKids(){
+  if(!audioCtx){return;}
   tone("kids 300","triangle",300,.2,.02,null,0);
   tone("kids 500","triangle",500,.2,.02,null,0);
 }
 
 // Play temple bell.
 function sfxTempleBell(){
+  if(!audioCtx){return;}
   tone("temple bell","sine",528,2,.015,null,0);
 }
 
@@ -376,6 +394,7 @@ function scheduleAmbient(){
 
 // Update all intermittent village ambience from RAF time.
 function updateAmbient(){
+  if(!audioCtx){return;}
   if(clock>=ambient.bird){sfxBird();ambient.bird=clock+1.5+Math.random()*2.5;}
   if(clock>=ambient.wash){sfxWash();ambient.wash=clock+1;}
   if(clock>=ambient.splash){sfxSplash();ambient.splash=clock+2;}
@@ -685,14 +704,20 @@ function drawFrame(){
   drawDangerBar();
   drawPrompts();
   drawControls();
-  drawStateText();
 }
 
 // Main RAF loop.
 function gameLoop(now){
-  pollCanvasSize();
-  const dt=Math.min(.033,(now-last)/1000||0);
-  last=now;update(dt);drawFrame();requestAnimationFrame(gameLoop);
+  try{
+    pollCanvasSize();
+    const dt=Math.min(.033,(now-last)/1000||0);
+    last=now;
+    update(dt);
+    drawFrame();
+  }catch(err){
+    console.error('RAF tick error:',err);
+  }
+  requestAnimationFrame(gameLoop);
 }
 
 // Pause when page is hidden.
