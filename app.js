@@ -82,6 +82,8 @@ let pauseHomeZone = null;
 let homePlayZone = null;
 let homeLevelsZone = null;
 let terminalZones = [];
+let battleZones = [];
+let selectedTerminal = 0;
 const TERMINALS = [
   { name: "UDAAN", from: 1, to: 15 },
   { name: "DHEEL", from: 16, to: 30 },
@@ -441,12 +443,24 @@ function handlePointerDown(event) {
     (event.clientY - rect.top) *
     (canvas.height / rect.height);
 
+  if (gameState === "battleSelect") {
+    for (let i = 0; i < battleZones.length; i++) {
+      if (inZone(x, y, battleZones[i])) {
+        resetLevel(TERMINALS[selectedTerminal].from + i);
+        transitionState("playing");
+        pushPrompt("LEVEL " + level, "#FFD700", 1.0);
+        return;
+      }
+    }
+    transitionState("levelSelect");
+    return;
+  }
+
   if (gameState === "levelSelect") {
     for (let i = 0; i < terminalZones.length; i++) {
       if (inZone(x, y, terminalZones[i])) {
-        resetLevel(TERMINALS[i].from);
-        transitionState("playing");
-        pushPrompt(TERMINALS[i].name + " • LEVEL " + level, "#FFD700", 1.1);
+        selectedTerminal = i;
+        transitionState("battleSelect");
         return;
       }
     }
@@ -553,7 +567,8 @@ function transitionState(nextState) {
     "katching",
     "levelClear",
     "levelFail",
-    "levelSelect"
+    "levelSelect",
+    "battleSelect"
   ];
 
   if (!validStates.includes(nextState)) return;
@@ -810,6 +825,7 @@ function update(dt) {
   switch (gameState) {
     case "home":
     case "levelSelect":
+    case "battleSelect":
       updateHome(dt);
       break;
 
@@ -957,6 +973,10 @@ function render() {
     renderLevelSelect();
     return;
   }
+  if (gameState === "battleSelect") {
+    renderBattleSelect();
+    return;
+  }
 
   renderScene();
   renderStrings();
@@ -1004,6 +1024,25 @@ function render() {
   }
 
   renderPrompts();
+}
+
+function renderBattleSelect() {
+  ctx.clearRect(0,0,W,H); ctx.fillStyle="#C88A4A"; ctx.fillRect(0,0,W,H);
+  if(sceneReady){ctx.save();ctx.globalAlpha=0.3;ctx.drawImage(sceneImage,coverX,coverY,coverW,coverH);ctx.restore();}
+  const t=TERMINALS[selectedTerminal];
+  ctx.save();ctx.textAlign="center";ctx.textBaseline="middle";ctx.lineWidth=5;ctx.strokeStyle="#000";ctx.fillStyle="#FFD700";ctx.font='bold 33px "Arial Black", Arial, sans-serif';
+  ctx.strokeText(t.name,W/2,H*0.15);ctx.fillText(t.name,W/2,H*0.15);
+  ctx.font="bold 17px Arial, sans-serif";ctx.fillStyle="#fff";ctx.fillText("CHOOSE YOUR BATTLE",W/2,H*0.21);
+  battleZones=[];
+  const size=Math.min(W*0.23,H*0.115), gapX=W*0.28,gapY=H*0.14;
+  for(let i=0;i<15;i++){
+    const col=i%3,row=Math.floor(i/3),x=W/2+(col-1)*gapX-size/2,y=H*0.26+row*gapY;
+    const z={x,y,w:size,h:size};battleZones.push(z);
+    roundedRectPath(ctx,x,y,size,size,13);ctx.fillStyle=["#FF1493","#FF8C00","#00A86B"][col];ctx.fill();ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.stroke();
+    ctx.fillStyle="#fff";ctx.font='bold 24px "Arial Black", Arial, sans-serif';ctx.fillText(String(t.from+i),x+size/2,y+size/2);
+  }
+  ctx.fillStyle="#fff";ctx.font="bold 13px Arial, sans-serif";ctx.fillText("ALL BATTLES UNLOCKED • Tap outside to go back",W/2,H*0.97,W*0.95);
+  ctx.restore();
 }
 
 function renderLevelSelect() {
