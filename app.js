@@ -1,5 +1,5 @@
-// PATANG_VERSION: 3.6.0
-// LAST_MAJOR_CHANGE: Fixed instant-cut loop on level start, spawn grace period, kite reset on retry, timer decrement confirmed
+// PATANG_VERSION: 4.0.0
+// LAST_MAJOR_CHANGE: Full rebuild of game logic — dt clamp, conservative cut detection, explicit state resets, grace period, distance guard
 "use strict";
 
 const canvas=document.getElementById("gameCanvas");
@@ -22,14 +22,16 @@ let gameState="playing";
 let cutResult="";
 let stateTimer=0;
 let frameCount=0;
-let spawnGraceActive=false;
-let spawnGraceElapsed=0;
+let spawnGrace=0;
+let aiHuntingTimer=0;
+let brushCooldown=0;
+let lastDt=0;
 let failReason="";
 let level=1;
 let levelTimeLeft=60;
 let tension=.25;
 let clock=0;
-let last=performance.now();
+let lastTimestamp=performance.now();
 let audioWater=null;
 let audioSparrow=null;
 let audioCrow=null;
@@ -139,7 +141,7 @@ function loadScene(){
 
 // Return the level time limit.
 function levelDuration(n){
-  return Math.max(30,60-(n-1)*3);
+  return Math.max(30,60-(n-1)*2);
 }
 
 // Return AI sharpness for the current level.
@@ -151,7 +153,7 @@ function aiSharpness(){
 function resetPlayer(){
   player.x=W()*.62;
   player.y=H()*.28;
-  player.vx=72;
+  player.vx=0;
   player.vy=0;
   player.rotation=0;
   player.direction=1;
@@ -164,13 +166,13 @@ function resetPlayer(){
 function resetAI(){
   ai.x=W()*.15;
   ai.y=H()*.15;
-  ai.vx=-58;
+  ai.vx=0;
   ai.vy=0;
   ai.rotation=0;
-  ai.direction=-1;
+  ai.direction=1;
   ai.state="cruise";
   ai.attackTime=0;
-  ai.nextAttack=clock+5+Math.random()*3;
+  ai.nextAttack=0;
   ai.cut=false;
   ai.cutTime=0;
   ai.alpha=1;
@@ -195,19 +197,27 @@ function resetEffects(){
 
 // Start or retry the current level.
 function startLevel(){
-  console.log("LEVEL START: init entered");
-  frameCount=0;
-  levelTimeLeft=levelDuration(level);
-  tension=.25;
-  clock=0;
   resetEffects();
   resetPlayer();
   resetAI();
-  spawnGraceActive=true;
-  spawnGraceElapsed=0;
-  console.log("LEVEL START: kites initialized");
+  player.x=W()*.62;
+  player.y=H()*.28;
+  player.vx=0;
+  player.vy=0;
+  ai.x=W()*.15;
+  ai.y=H()*.15;
+  ai.vx=0;
+  ai.vy=0;
+  levelTimeLeft=levelDuration(level);
+  spawnGrace=2.0;
+  aiHuntingTimer=8.0;
+  stateTimer=0;
+  cutResult="";
+  failReason="";
+  tension=.25;
+  clock=0;
+  brushCooldown=0;
   scheduleAmbient();
-  console.log("LEVEL START: entering playing state");
   transitionState("playing");
   startAmbience();
 }
@@ -329,7 +339,7 @@ function updatePrompts(dt){
 
 // Apply DHEEL input.
 function doDheel(){
-  if(mode!=="playing"||paused||outcome.active||bumper.active||player.cut||ai.cut){
+  if(mode!=="playing"||paused||gameState!=="playing"||player.cut||ai.cut){
     return;
   }
   player.vy=-220;
@@ -340,7 +350,7 @@ function doDheel(){
 
 // Apply KHENCH input.
 function doKhench(){
-  if(mode!=="playing"||paused||outcome.active||bumper.active||player.cut||ai.cut){
+  if(mode!=="playing"||paused||gameState!=="playing"||player.cut||ai.cut){
     return;
   }
   player.vy=220;
@@ -400,76 +410,49 @@ function handlePointerDown(e){
   }
 }
 
-// Ease player vertical velocity toward zero.
-function decayPlayerVy(dt){
-  const d=150*dt;
-  if(player.vy>0){
-    player.vy=Math.max(0,player.vy-d);
-  }else if(player.vy<0){
-    player.vy=Math.min(0,player.vy+d);
-  }
-}
+// Update both live kites. This is the only playing-state physics path.
+function updateKitePhysics(dt){
+  const damping=Math.pow(.92,dt*60);
 
-// Update tethered player movement.
-function updatePlayer(dt){
-  if(player.cut){
-    updateCutKite(player,dt);
-    return;
-  }
-  if(player.x<=layout.kiteMinX){
-    player.direction=1;
-  }else if(player.x>=layout.kiteMaxX){
-    player.direction=-1;
-  }
-  const target=player.direction*(72+24*Math.sin(clock*.55));
-  player.vx+=(target-player.vx)*(1-Math.exp(-dt*3));
-  decayPlayerVy(dt);
-  player.x=clamp(player.x+player.vx*dt,layout.kiteMinX,layout.kiteMaxX);
-  player.y=clamp(player.y+player.vy*dt,layout.playerMinY,layout.playerMaxY);
-  player.rotation=Math.atan2(player.vy,player.vx)*.45;
-}
+  player.x+=player.vx*dt;
+  player.y+=player.vy*dt;
+  player.vy*=damping;
+  if(Math.abs(player.vy)<.5) player.vy=0;
+  const playerMinX=W()*.10;
+  const playerMaxX=W()*.90;
+  if(player.x<playerMinX){player.x=playerMinX;player.vx=Math.abs(player.vx);}
+  if(player.x>playerMaxX){player.x=playerMaxX;player.vx=-Math.abs(player.vx);}
+  player.y=clamp(player.y,H()*.16,H()*.52);
+  player.rotation=Math.atan2(player.vy,Math.abs(player.vx)+60)*.45;
 
-// Begin an AI attack run.
-function beginAttack(){
-  ai.state="attack";
-  ai.attackTime=0;
-}
-
-// Update AI cruise and attack behavior.
-function updateAI(dt){
-  if(ai.cut){
-    updateCutKite(ai,dt);
-    return;
-  }
-  if(ai.state==="cruise"&&clock>=ai.nextAttack){
-    beginAttack();
-  }
-  if(ai.state==="attack"){
-    ai.attackTime+=dt;
+  aiHuntingTimer=Math.max(0,aiHuntingTimer-dt);
+  if(aiHuntingTimer>0){
+    const cruiseTargetX=W()*.20;
+    const cruiseTargetY=H()*.22;
+    ai.vx+=(cruiseTargetX-ai.x)*dt*.35;
+    ai.vy+=(cruiseTargetY-ai.y)*dt*.35;
+    ai.vx=clamp(ai.vx,-24,24);
+    ai.vy=clamp(ai.vy,-18,18);
+  }else{
     const dx=player.x-ai.x;
     const dy=player.y-ai.y;
-    const d=Math.max(1,Math.hypot(dx,dy));
-    const speed=Math.max(150,Math.min(230,d/3.2));
-    ai.vx=dx/d*speed;
-    ai.vy=dy/d*speed;
-    if(ai.attackTime>=4){
-      ai.state="cruise";
-      ai.nextAttack=clock+5+Math.random()*3;
-    }
-  }else{
-    if(ai.x<=layout.kiteMinX){
-      ai.direction=1;
-    }else if(ai.x>=layout.kiteMaxX){
-      ai.direction=-1;
-    }
-    ai.vx=ai.direction*(58+18*Math.sin(clock*.71+1.2));
-    const targetY=H()*(.30+.10*Math.sin(clock*.43+level));
-    ai.vy+=(clamp(targetY,layout.aiMinY,layout.aiMaxY)-ai.y)*dt*2.2;
-    ai.vy=clamp(ai.vy,-75,75);
+    const distance=Math.max(1,Math.hypot(dx,dy));
+    const playerMaxSpeed=220;
+    const huntSpeed=playerMaxSpeed*.40;
+    const threeSecondGuard=Math.max(0,(distance-W()*.10)/3);
+    const speed=Math.min(huntSpeed,threeSecondGuard);
+    ai.vx=dx/distance*speed;
+    ai.vy=dy/distance*speed;
   }
-  ai.x=clamp(ai.x+ai.vx*dt,layout.kiteMinX,layout.kiteMaxX);
-  ai.y=clamp(ai.y+ai.vy*dt,layout.aiMinY,layout.aiMaxY);
-  ai.rotation=Math.atan2(ai.vy,ai.vx)*.45;
+
+  ai.x+=ai.vx*dt;
+  ai.y+=ai.vy*dt;
+  const aiMinX=W()*.10;
+  const aiMaxX=W()*.90;
+  if(ai.x<aiMinX){ai.x=aiMinX;ai.vx=Math.abs(ai.vx);}
+  if(ai.x>aiMaxX){ai.x=aiMaxX;ai.vx=-Math.abs(ai.vx);}
+  ai.y=clamp(ai.y,H()*.12,H()*.55);
+  ai.rotation=Math.atan2(ai.vy,Math.abs(ai.vx)+60)*.45;
 }
 
 // Update an untethered cut kite.
@@ -485,78 +468,90 @@ function updateCutKite(kite,dt){
 // Update string sharpness from altitude.
 function updateTension(dt){
   const y=player.y/H();
-  if(y<.25){
-    tension+=.4*dt;
-  }else if(y>.35){
-    tension-=.3*dt;
-  }
+  if(y<.25){tension+=.4*dt;}
+  else if(y>.35){tension-=.3*dt;}
   tension=clamp(tension,0,1);
 }
 
-// Return orientation of three points.
-function orientation(ax,ay,bx,by,cx,cy){
-  return(bx-ax)*(cy-ay)-(by-ay)*(cx-ax);
+// Conservative finite-segment intersection test.
+function segmentsIntersect(a,b,c,d){
+  const rX=b.x-a.x;
+  const rY=b.y-a.y;
+  const sX=d.x-c.x;
+  const sY=d.y-c.y;
+  const denom=rX*sY-rY*sX;
+  if(Math.abs(denom)<.000001) return false;
+  const qpx=c.x-a.x;
+  const qpy=c.y-a.y;
+  const t=(qpx*sY-qpy*sX)/denom;
+  const u=(qpx*rY-qpy*rX)/denom;
+  return t>=0&&t<=1&&u>=0&&u<=1;
 }
 
-// Return the intersection point of two finite segments or null.
+// Return the intersection point for the visual spark only.
 function segmentIntersection(a,b,c,d){
   const rX=b.x-a.x;
   const rY=b.y-a.y;
   const sX=d.x-c.x;
   const sY=d.y-c.y;
   const denom=rX*sY-rY*sX;
-  if(Math.abs(denom)<.000001){
-    return null;
-  }
+  if(Math.abs(denom)<.000001) return null;
   const qpx=c.x-a.x;
   const qpy=c.y-a.y;
   const t=(qpx*sY-qpy*sX)/denom;
   const u=(qpx*rY-qpy*rX)/denom;
-  if(t<0||t>1||u<0||u>1){
-    return null;
-  }
+  if(t<0||t>1||u<0||u>1) return null;
   return{x:a.x+t*rX,y:a.y+t*rY};
 }
 
-// Check the two live strings for contact.
-function checkStringCombat(){
-  if(player.cut||ai.cut||outcome.active||bumper.active||spawnGraceActive){
-    return;
-  }
-  if(Math.hypot(player.x-ai.x,player.y-ai.y)>W()*.60){
-    return;
-  }
+// Compare string sharpness; a close match brushes without cutting.
+function compareSharpness(){
+  const enemy=aiSharpness();
+  if(Math.abs(tension-enemy)<.06) return "none";
+  return tension>enemy?"ai":"player";
+}
+
+// Strictly conservative string combat.
+function checkStringCrossing(){
+  const dx=player.x-ai.x;
+  const dy=player.y-ai.y;
+  const distance=Math.sqrt(dx*dx+dy*dy);
+  if(distance>canvas.width*.35) return;
+
   const playerOrigin={x:layout.handX,y:layout.handY};
   const playerEnd={x:player.x,y:player.y};
-  const aiOrigin={x:W(),y:H()};
+  const aiOrigin={x:canvas.width,y:canvas.height};
   const aiEnd={x:ai.x,y:ai.y};
+
+  if(!segmentsIntersect(playerOrigin,playerEnd,aiOrigin,aiEnd)) return;
+
+  const playerStringLength=Math.hypot(player.x-layout.handX,player.y-layout.handY);
+  if(playerStringLength<canvas.height*.15) return;
+
   const point=segmentIntersection(playerOrigin,playerEnd,aiOrigin,aiEnd);
-  if(!point){
-    return;
+  if(point){
+    spark.active=true;
+    spark.time=0;
+    spark.x=point.x;
+    spark.y=point.y;
   }
-  spark.active=true;
-  spark.time=0;
-  spark.x=point.x;
-  spark.y=point.y;
-  playPluck(1.00,.55);
-  playPluckLayer(1.40,.55);
-  const enemy=aiSharpness();
-  if(tension>enemy){
+
+  cutResult=compareSharpness();
+  if(cutResult==="ai"){
     cutAI();
-  }else if(tension<enemy){
+    beginKatching("ai");
+  }else if(cutResult==="player"){
     cutPlayer();
-  }else if(Math.random()<.5){
-    cutAI();
-  }else{
-    cutPlayer();
+    beginKatching("player");
+  }else if(brushCooldown<=0){
+    playPluck(1.0,.30);
+    brushCooldown=.5;
   }
 }
 
-// Mark the AI kite as cut and start the win sequence.
+// Mark AI cut. State transition is owned by checkStringCrossing.
 function cutAI(){
-  if(ai.cut||player.cut){
-    return;
-  }
+  if(ai.cut||player.cut) return;
   ai.cut=true;
   ai.cutTime=0;
   ai.vx*=.35;
@@ -566,14 +561,11 @@ function cutAI(){
   looseString.owner="ai";
   looseString.endX=ai.x;
   looseString.endY=ai.y;
-  beginKatching("ai");
 }
 
-// Mark the player kite as cut and start the fail sequence.
+// Mark player cut. State transition is owned by checkStringCrossing.
 function cutPlayer(){
-  if(player.cut||ai.cut){
-    return;
-  }
+  if(player.cut||ai.cut) return;
   player.cut=true;
   player.cutTime=0;
   player.vx*=.35;
@@ -583,22 +575,24 @@ function cutPlayer(){
   looseString.owner="player";
   looseString.endX=player.x;
   looseString.endY=player.y;
-  beginKatching("player");
 }
 
 // Transition between explicit game states.
 function transitionState(nextState){
   const oldState=gameState;
-  if(oldState===nextState){return;}
   gameState=nextState;
   console.log("STATE TRANSITION:",oldState,"->",nextState,"at frame",frameCount);
-  if(nextState==="playing"){startAmbience();scheduleAmbient();}else{stopAmbience();}
+  if(nextState==="playing"){startAmbience();scheduleAmbient();}
+  else{stopAmbience();}
 }
 
 // Start the KAT GAI hold.
 function beginKatching(result){
   cutResult=result;
   stateTimer=1.5;
+  outcome.active=true;
+  outcome.type="cut";
+  outcome.time=0;
   prompt("KAT GAI!","#FF2020",52,1.5);
   playPluck(1.60,.60);
   transitionState("katching");
@@ -606,7 +600,7 @@ function beginKatching(result){
 
 // Start explicit level clear.
 function beginLevelClear(){
-  stateTimer=2;
+  stateTimer=2.0;
   transitionState("levelClear");
   startBumper();
 }
@@ -617,33 +611,9 @@ function beginLevelFail(reason){
   stateTimer=1.5;
   outcome.active=true;
   outcome.type=reason;
-  outcome.time=2;
+  outcome.time=0;
   transitionState("levelFail");
   playPluck(.55,.50);
-}
-
-// Update explicit RAF state timers.
-function updateStateMachine(dt){
-  if(gameState==="katching"){
-    stateTimer-=dt;
-    updateSpark(dt);
-    updateLooseString(dt);
-    if(ai.cut){updateAI(dt);}
-    if(player.cut){updatePlayer(dt);}
-    if(stateTimer<=0){if(cutResult==="ai"){beginLevelClear();}else{beginLevelFail("cut");}}
-    return;
-  }
-  if(gameState==="levelClear"){
-    stateTimer-=dt;
-    updateBumper(dt);
-    if(stateTimer<=0){bumper.active=false;level+=1;startLevel();}
-    return;
-  }
-  if(gameState==="levelFail"){
-    stateTimer-=dt;
-    outcome.time+=dt;
-    if(stateTimer<=0){outcome.active=false;startLevel();}
-  }
 }
 
 // Start the level-clear celebration bumper.
@@ -657,17 +627,13 @@ function startBumper(){
   for(let i=0;i<24;i+=1){
     bumper.confetti.push({x:Math.random()*W(),y:-Math.random()*H()*.35,vx:(Math.random()-.5)*70,vy:170+Math.random()*180,rot:Math.random()*Math.PI*2,spin:(Math.random()>.5?1:-1)*(3+Math.random()*4),color:colors[i%colors.length]});
   }
-  for(let i=0;i<8;i+=1){
-    bumper.stars.push({angle:i*Math.PI/4});
-  }
+  for(let i=0;i<8;i+=1) bumper.stars.push({angle:i*Math.PI/4});
   playPluck(1.60,.60);
 }
 
 // Update the level-clear celebration.
 function updateBumper(dt){
-  if(!bumper.active){
-    return;
-  }
+  if(!bumper.active) return;
   bumper.time+=dt;
   for(let i=0;i<bumper.confetti.length;i+=1){
     const p=bumper.confetti[i];
@@ -679,77 +645,95 @@ function updateBumper(dt){
     bumper.secondChime=true;
     playPluck(1.90,.60);
   }
-
-}
-
-// Start a level-fail sequence.
-function startFail(type){
-  if(outcome.active||bumper.active){
-    return;
-  }
-  outcome.active=true;
-  outcome.type=type;
-  outcome.time=0;
-}
-
-// Update the level-fail sequence.
-function updateFail(dt){
-  if(!outcome.active){
-    return;
-  }
-  outcome.time+=dt;
-  if(outcome.time>=2.5){
-    startLevel();
-  }
 }
 
 // Update the crossing spark.
 function updateSpark(dt){
-  if(!spark.active){
-    return;
-  }
+  if(!spark.active) return;
   spark.time+=dt;
-  if(spark.time>=.2){
-    spark.active=false;
-  }
+  if(spark.time>=.2) spark.active=false;
 }
 
 // Update the snapped loose string.
 function updateLooseString(dt){
-  if(!looseString.active){
+  if(!looseString.active) return;
+  looseString.time+=dt;
+  if(looseString.time>=1) looseString.active=false;
+}
+
+// Playing has one ordered path: timer, grace, physics, combat.
+function updatePlaying(dt){
+  levelTimeLeft-=dt;
+  if(levelTimeLeft<=0){
+    levelTimeLeft=0;
+    beginLevelFail("TIME OUT");
     return;
   }
-  looseString.time+=dt;
-  if(looseString.time>=1){
-    looseString.active=false;
+
+  spawnGrace-=dt;
+  if(spawnGrace>0){
+    updateKitePhysics(dt);
+    return;
+  }
+
+  updateKitePhysics(dt);
+  checkStringCrossing();
+}
+
+// Katching owns only its 1.5-second transition.
+function updateKatching(dt){
+  stateTimer-=dt;
+  if(ai.cut) updateCutKite(ai,dt);
+  if(player.cut) updateCutKite(player,dt);
+  if(stateTimer<=0){
+    if(cutResult==="ai") beginLevelClear();
+    else beginLevelFail("cut");
   }
 }
 
-// Update active gameplay.
-function update(dt){
-  updatePrompts(dt);
-  if(mode!=="playing"){return;}
-  if(gameState!=="playing"){updateStateMachine(dt);return;}
-  if(paused){return;}
-  clock+=dt;
-  levelTimeLeft=Math.max(0,levelTimeLeft-dt);
-  if(frameCount%60===0) console.log("timer decrement, new value: " + levelTimeLeft);
-  if(spawnGraceActive){
-    spawnGraceElapsed+=dt;
-    if(spawnGraceElapsed>=2){
-      spawnGraceActive=false;
-    }
+// Level clear owns only its 2-second transition.
+function updateLevelClear(dt){
+  stateTimer-=dt;
+  updateBumper(dt);
+  if(stateTimer<=0){
+    bumper.active=false;
+    outcome.active=false;
+    level+=1;
+    startLevel();
   }
-  updatePlayer(dt);
-  updateAI(dt);
+}
+
+// Level fail owns only its 1.5-second retry transition.
+function updateLevelFail(dt){
+  stateTimer-=dt;
+  if(stateTimer<=0){
+    outcome.active=false;
+    startLevel();
+  }
+}
+
+// Explicit state dispatcher.
+function update(dt){
+  lastDt=dt;
+  updatePrompts(dt);
+  if(mode!=="playing"||paused) return;
+
+  clock+=dt;
+  brushCooldown=Math.max(0,brushCooldown-dt);
   updateTension(dt);
   updateAmbient();
   updateSpark(dt);
   updateLooseString(dt);
-  checkStringCombat();
-  if(levelTimeLeft<=0&&!player.cut&&!ai.cut){
-    prompt("TIME OUT","#FF2020",52,1.5);
-    beginLevelFail("timeout");
+
+  switch(gameState){
+    case "playing": updatePlaying(dt); break;
+    case "katching": updateKatching(dt); break;
+    case "levelClear": updateLevelClear(dt); break;
+    case "levelFail": updateLevelFail(dt); break;
+  }
+
+  if(gameState==="playing"&&frameCount%120===0){
+    console.log("timer:",levelTimeLeft.toFixed(2),"state:",gameState,"frame:",frameCount);
   }
 }
 
@@ -1133,7 +1117,8 @@ function drawHome(){
 }
 
 // Render the game frame.
-function drawFrame(){
+function render(){
+  pollCanvasSize();
   ctx.clearRect(0,0,canvas.width,canvas.height);
   drawScene();
   if(mode==="home"){
@@ -1155,7 +1140,7 @@ function drawFrame(){
   drawBumper();
   drawFail();
   ctx.save();
-  const debugText="state:"+gameState+" frames:"+frameCount+" timer:"+levelTimeLeft.toFixed(2);
+  const debugText="state:"+gameState+" frames:"+frameCount+" timer:"+levelTimeLeft.toFixed(1)+" dt:"+lastDt.toFixed(3);
   ctx.font="14px monospace";
   ctx.textAlign="left";
   ctx.textBaseline="top";
@@ -1170,20 +1155,15 @@ function drawFrame(){
 }
 
 // Main RAF loop.
-function gameLoop(now){
-  try{
+function gameLoop(timestamp) {
+  try {
+    const dt = Math.min((timestamp - lastTimestamp) / 1000, 0.05);
+    lastTimestamp = timestamp;
     frameCount++;
-    if(frameCount<=10) console.log("RAF tick "+frameCount+" state="+gameState);
-    if(frameCount===1) console.log("RAF TICK 1: state=" + gameState + " frameCount=" + frameCount);
-    if(frameCount===2) console.log("RAF TICK 2: state=" + gameState + " frameCount=" + frameCount);
-    if(frameCount===10) console.log("RAF TICK 10: state=" + gameState + " frameCount=" + frameCount);
-    pollCanvasSize();
-    const dt=Math.min(.033,(now-last)/1000||0);
-    last=now;
     update(dt);
-    drawFrame();
-  }catch(err){
-    console.error("RAF error at state " + gameState + " frame " + frameCount + ":", err.stack || err);
+    render();
+  } catch (err) {
+    console.error('RAF error:', err);
   }
   requestAnimationFrame(gameLoop);
 }
