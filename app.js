@@ -38,7 +38,7 @@ const ai = {
   vx: 0,
   vy: 0,
   size: 0,
-  huntTimer: 8,
+  huntTimer: 12,
   retreatTimer: 0
 };
 
@@ -201,6 +201,16 @@ function initAudio() {
   audioWater.loop = true;
   audioWater.preload = "auto";
 
+  // Keep the water bed independent from bird/action sounds.
+  // Some mobile browsers can occasionally stop a looping media element;
+  // restart only this dedicated element if that happens unexpectedly.
+  audioWater.addEventListener("ended", function () {
+    if (!paused && audioInitialized) {
+      audioWater.currentTime = 0;
+      audioWater.play().catch(() => {});
+    }
+  });
+
   audioSparrow = new Audio("public/assets/sparrow.mp3");
   audioSparrow.volume = 0.24;
   audioSparrow.preload = "auto";
@@ -259,6 +269,13 @@ function playPluck(rate) {
 
 function scheduleAmbient(dt) {
   if (!audioInitialized || paused) return;
+
+  // Water has its own Audio object and is never reused for bird calls.
+  // This watchdog prevents an incidental mobile-browser stop from
+  // creating a few seconds of silence.
+  if (audioWater && audioWater.paused && gameState === "playing") {
+    audioWater.play().catch(() => {});
+  }
 
   aiSparrowTimer -= dt;
   aiCrowTimer -= dt;
@@ -513,7 +530,7 @@ function resetLevel(n) {
   ai.vx = 0;
   ai.vy = 0;
 
-  ai.huntTimer = 8.0;
+  ai.huntTimer = 12.0;
   ai.retreatTimer = 0;
 
   manja = 0.3;
@@ -623,6 +640,12 @@ function cutPlayer() {
 function updatePlayerPhysics(dt) {
   player.vx = 70 * Math.sin(sineAccumulator * 0.7);
 
+  // Gently recenter natural flight in the safe middle band. Button input
+  // still has authority, but an untouched kite settles around 0.35H
+  // instead of wandering into a MANJA-decay zone.
+  const safeCenterY = 0.35 * H;
+  const recenterAccel = (safeCenterY - player.y) * 1.35;
+  player.vy += recenterAccel * dt;
   player.vy *= Math.pow(0.94, dt * 60);
 
   player.x += player.vx * dt;
@@ -704,13 +727,17 @@ function updateAIPhysics(dt) {
 }
 
 function updateManja(dt) {
-  if (player.y < 0.28 * H) {
-    manja += 0.35 * dt;
-  } else if (player.y > 0.42 * H) {
-    manja -= 0.25 * dt;
-  } else {
-    manja -= 0.05 * dt;
+  const safeTop = 0.28 * H;
+  const safeBottom = 0.42 * H;
+
+  if (player.y > safeBottom) {
+    // Only being below the safe band drains MANJA.
+    manja -= 0.18 * dt;
+  } else if (player.y >= safeTop) {
+    // Safe-band flying slowly rewards stability without filling too fast.
+    manja += 0.025 * dt;
   }
+  // Above the safe band is neutral: no automatic MANJA loss or gain.
 
   manja = Math.max(0, Math.min(1, manja));
 }
