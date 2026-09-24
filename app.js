@@ -13,6 +13,7 @@ let H = 0;
 
 let sceneImage = null;
 let sceneReady = false;
+const SCENE_BRIGHTEN_ALPHA = 0.075;
 
 let gameState = "home";
 let level = 1;
@@ -1100,7 +1101,7 @@ function renderHome() {
 
   if (sceneReady) {
     ctx.save();
-    ctx.globalAlpha = 0.55;
+    ctx.globalAlpha = 0.62;
 
     ctx.drawImage(
       sceneImage,
@@ -1111,6 +1112,7 @@ function renderHome() {
     );
 
     ctx.restore();
+    brightenScene();
   }
 
   ctx.save();
@@ -1230,6 +1232,16 @@ function renderHome() {
   ctx.restore();
 }
 
+function brightenScene() {
+  // Gentle warm screen blend: preserves the original artwork and gameplay geometry.
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  ctx.globalAlpha = SCENE_BRIGHTEN_ALPHA;
+  ctx.fillStyle = "#FFD7A0";
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+}
+
 function renderScene() {
   ctx.clearRect(0, 0, W, H);
 
@@ -1244,6 +1256,7 @@ function renderScene() {
       coverW,
       coverH
     );
+    brightenScene();
   }
 }
 
