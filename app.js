@@ -196,39 +196,39 @@ function initAudio() {
   // Eight independent HTML Audio elements.
   // The four action variants reuse the existing pluck asset.
 
-  audioWater = new Audio("/assets/water.mp3");
+  audioWater = new Audio("public/assets/water.mp3");
   audioWater.volume = 0.20;
   audioWater.loop = true;
   audioWater.preload = "auto";
 
-  audioSparrow = new Audio("/assets/sparrow.mp3");
+  audioSparrow = new Audio("public/assets/sparrow.mp3");
   audioSparrow.volume = 0.24;
   audioSparrow.preload = "auto";
 
-  audioCrow = new Audio("/assets/crow.mp3");
+  audioCrow = new Audio("public/assets/crow.mp3");
   audioCrow.volume = 0.22;
   audioCrow.preload = "auto";
 
-  audioPluck = new Audio("/assets/pluck.mp3");
+  audioPluck = new Audio("public/assets/pluck.mp3");
   audioPluck.volume = 0.48;
   audioPluck.preload = "auto";
 
-  audioDheel = new Audio("/assets/pluck.mp3");
+  audioDheel = new Audio("public/assets/pluck.mp3");
   audioDheel.volume = 0.28;
   audioDheel.playbackRate = 1.30;
   audioDheel.preload = "auto";
 
-  audioKhench = new Audio("/assets/pluck.mp3");
+  audioKhench = new Audio("public/assets/pluck.mp3");
   audioKhench.volume = 0.28;
   audioKhench.playbackRate = 0.80;
   audioKhench.preload = "auto";
 
-  audioKatGai = new Audio("/assets/pluck.mp3");
+  audioKatGai = new Audio("public/assets/pluck.mp3");
   audioKatGai.volume = 0.35;
   audioKatGai.playbackRate = 1.60;
   audioKatGai.preload = "auto";
 
-  audioManjaGaya = new Audio("/assets/pluck.mp3");
+  audioManjaGaya = new Audio("public/assets/pluck.mp3");
   audioManjaGaya.volume = 0.30;
   audioManjaGaya.playbackRate = 0.55;
   audioManjaGaya.preload = "auto";
@@ -1936,7 +1936,7 @@ function init() {
     );
   };
 
-  sceneImage.src = "/assets/scene.png";
+  sceneImage.src = "public/assets/scene.png";
 
   lastTime = performance.now();
 }
