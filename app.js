@@ -16,7 +16,12 @@ let sceneReady = false;
 
 let gameState = "home";
 let level = 1;
-let levelTimeLeft = 60;
+const MAX_LEVEL = 105;
+const ROUND_SECONDS = 9;
+let levelTimeLeft = ROUND_SECONDS;
+let playerActionScore = 0;
+let contactTime = 0;
+let roundSeed = 0;
 
 let frameCount = 0;
 let lastTime = performance.now();
@@ -38,7 +43,7 @@ const ai = {
   vx: 0,
   vy: 0,
   size: 0,
-  huntTimer: 12,
+  huntTimer: 1.8,
   retreatTimer: 0
 };
 
@@ -270,40 +275,11 @@ function playPluck(rate) {
 function scheduleAmbient(dt) {
   if (!audioInitialized || paused) return;
 
-  // Water has its own Audio object and is never reused for bird calls.
-  // This watchdog prevents an incidental mobile-browser stop from
-  // creating a few seconds of silence.
+  // Keep only the clean water bed. The supplied bird tracks contain
+  // distracting human/voice-like material, so they are intentionally
+  // disabled for this base build.
   if (audioWater && audioWater.paused && gameState === "playing") {
     audioWater.play().catch(() => {});
-  }
-
-  aiSparrowTimer -= dt;
-  aiCrowTimer -= dt;
-
-  if (aiSparrowTimer <= 0) {
-    if (audioSparrow) {
-      try {
-        audioSparrow.currentTime = 0;
-        audioSparrow.play().catch(() => {});
-      } catch (e) {
-        // Ambient audio is optional.
-      }
-    }
-
-    aiSparrowTimer = 4 + Math.random() * 5;
-  }
-
-  if (aiCrowTimer <= 0) {
-    if (audioCrow) {
-      try {
-        audioCrow.currentTime = 0;
-        audioCrow.play().catch(() => {});
-      } catch (e) {
-        // Ambient audio is optional.
-      }
-    }
-
-    aiCrowTimer = 12 + Math.random() * 13;
   }
 }
 
@@ -457,9 +433,12 @@ function handlePointerDown(event) {
   if (paused) return;
 
   if (inZone(x, y, dheelZone)) {
-    player.vy = -200;
+    // DHEEL: loose line -> kite surges upward and outward.
+    player.vy -= 255;
+    player.vx += (player.x < W * 0.5 ? -1 : 1) * 85;
+    playerActionScore += 1;
 
-    manja = Math.min(1, manja + 0.10);
+    manja = Math.min(1, manja + 0.065);
 
     pushPrompt("DHEEL", "#00BFFF", 0.8);
 
@@ -478,9 +457,12 @@ function handlePointerDown(event) {
   }
 
   if (inZone(x, y, khenchZone)) {
-    player.vy = 200;
+    // KHENCH: sharp pull -> fast dive/tension attack.
+    player.vy += 285;
+    player.vx += (ai.x - player.x) * 0.18;
+    playerActionScore += 1;
 
-    manja = Math.max(0, manja - 0.05);
+    manja = Math.min(1, manja + 0.035);
 
     pushPrompt("KHENCH", "#FF3B30", 0.8);
 
@@ -516,46 +498,38 @@ function transitionState(nextState) {
 }
 
 function resetLevel(n) {
-  level = n;
-
-  levelTimeLeft = Math.max(30, 62 - n * 2);
+  level = Math.max(1, Math.min(MAX_LEVEL, n));
+  levelTimeLeft = ROUND_SECONDS;
 
   player.x = 0.62 * W;
-  player.y = 0.30 * H;
+  player.y = 0.34 * H;
   player.vx = 0;
   player.vy = 0;
 
-  ai.x = 0.22 * W;
-  ai.y = 0.22 * H;
+  ai.x = 0.24 * W;
+  ai.y = 0.27 * H;
   ai.vx = 0;
   ai.vy = 0;
 
-  ai.huntTimer = 12.0;
+  // Conflict starts quickly in a nine-second round, but never instantly.
+  ai.huntTimer = 1.8;
   ai.retreatTimer = 0;
-
-  manja = 0.3;
-
-  spawnGrace = 2.0;
+  manja = 0.52;
+  spawnGrace = 1.1;
   stateTimer = 0;
+  playerActionScore = 0;
+  contactTime = 0;
+  roundSeed = Math.random() * Math.PI * 2;
 
   aiWasCut = false;
   playerCut = false;
-
   scheduledClearPluckAt = -1;
   failReason = "LEVEL FAIL";
-
   promptQueue = [];
-
   paused = false;
 
-  if (audioWater && audioInitialized) {
-    try {
-      if (audioWater.paused) {
-        audioWater.play().catch(() => {});
-      }
-    } catch (e) {
-      // Gameplay does not depend on background audio.
-    }
+  if (audioWater && audioInitialized && audioWater.paused) {
+    audioWater.play().catch(() => {});
   }
 }
 
@@ -638,170 +612,119 @@ function cutPlayer() {
 // ============================================================
 
 function updatePlayerPhysics(dt) {
-  player.vx = 70 * Math.sin(sineAccumulator * 0.7);
+  // Light, organic breeze only. No strong automatic wind steering.
+  const breezeX =
+    Math.sin(sineAccumulator * 1.05 + roundSeed) * 15 +
+    Math.sin(sineAccumulator * 0.41 + 1.7) * 7;
+  const breezeY = Math.sin(sineAccumulator * 0.83 + roundSeed) * 9;
 
-  // Gently recenter natural flight in the safe middle band. Button input
-  // still has authority, but an untouched kite settles around 0.35H
-  // instead of wandering into a MANJA-decay zone.
-  const safeCenterY = 0.35 * H;
-  const recenterAccel = (safeCenterY - player.y) * 1.35;
-  player.vy += recenterAccel * dt;
-  player.vy *= Math.pow(0.94, dt * 60);
+  player.vx += breezeX * dt;
+  player.vy += breezeY * dt;
+
+  // A very weak restoring force prevents permanent edge sticking without
+  // playing the game for the user.
+  player.vx += (0.52 * W - player.x) * 0.035 * dt;
+  player.vy += (0.34 * H - player.y) * 0.025 * dt;
+
+  const drag = Math.pow(0.975, dt * 60);
+  player.vx *= drag;
+  player.vy *= drag;
+
+  const maxSpeed = 390;
+  const speed = Math.hypot(player.vx, player.vy);
+  if (speed > maxSpeed) {
+    player.vx = player.vx / speed * maxSpeed;
+    player.vy = player.vy / speed * maxSpeed;
+  }
 
   player.x += player.vx * dt;
   player.y += player.vy * dt;
 
-  player.x = Math.max(
-    0.15 * W,
-    Math.min(0.88 * W, player.x)
-  );
+  const minX = 0.10 * W, maxX = 0.90 * W;
+  const minY = 0.15 * H, maxY = 0.58 * H;
 
-  player.y = Math.max(
-    0.14 * H,
-    Math.min(0.48 * H, player.y)
-  );
-
-  if (
-    (player.y <= 0.14 * H && player.vy < 0) ||
-    (player.y >= 0.48 * H && player.vy > 0)
-  ) {
-    player.vy = 0;
-  }
+  if (player.x < minX) { player.x = minX; player.vx = Math.abs(player.vx) * 0.45; }
+  if (player.x > maxX) { player.x = maxX; player.vx = -Math.abs(player.vx) * 0.45; }
+  if (player.y < minY) { player.y = minY; player.vy = Math.abs(player.vy) * 0.45; }
+  if (player.y > maxY) { player.y = maxY; player.vy = -Math.abs(player.vy) * 0.45; }
 }
 
 function updateAIPhysics(dt) {
+  const difficulty = Math.min(1, (level - 1) / (MAX_LEVEL - 1));
+
   if (ai.huntTimer > 0) {
     ai.huntTimer = Math.max(0, ai.huntTimer - dt);
-
-    ai.vx =
-      40 * Math.sin(sineAccumulator * 0.85 + 0.8);
-
-    ai.vy =
-      20 * Math.sin(sineAccumulator * 1.15 + 0.5);
+    ai.vx = 22 * Math.sin(sineAccumulator * 1.2 + roundSeed);
+    ai.vy = 14 * Math.sin(sineAccumulator * 1.55 + 0.7);
   } else {
-    const dx = player.x - ai.x;
-    const dy = player.y - ai.y;
+    // Hunt a moving offset around the player so encounters feel like
+    // kite-fighting rather than deterministic homing.
+    const orbitX = Math.sin(sineAccumulator * (1.8 + difficulty) + roundSeed) * W * 0.12;
+    const orbitY = Math.cos(sineAccumulator * 1.45 + roundSeed) * H * 0.07;
+    const targetX = player.x + orbitX;
+    const targetY = player.y + orbitY;
+    const dx = targetX - ai.x;
+    const dy = targetY - ai.y;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    const huntSpeed = 82 + difficulty * 48;
 
-    const distance = Math.sqrt(dx * dx + dy * dy);
-
-    if (distance > 0.001) {
-      ai.vx = dx / distance * 55;
-      ai.vy = dy / distance * 55;
-    } else {
-      ai.vx = 0;
-      ai.vy = 0;
-    }
-
-    const speed = Math.sqrt(
-      ai.vx * ai.vx + ai.vy * ai.vy
-    );
-
-    if (speed > 70) {
-      ai.vx = ai.vx / speed * 70;
-      ai.vy = ai.vy / speed * 70;
-    }
+    ai.vx += (dx / distance * huntSpeed - ai.vx) * Math.min(1, dt * 3.2);
+    ai.vy += (dy / distance * huntSpeed - ai.vy) * Math.min(1, dt * 3.2);
   }
 
   ai.x += ai.vx * dt;
   ai.y += ai.vy * dt;
 
-  if (ai.x < 0.10 * W) {
-    ai.x = 0.10 * W;
-    ai.vx = Math.abs(ai.vx);
-  }
-
-  if (ai.x > 0.88 * W) {
-    ai.x = 0.88 * W;
-    ai.vx = -Math.abs(ai.vx);
-  }
-
-  if (ai.y < 0.10 * H) {
-    ai.y = 0.10 * H;
-    ai.vy = Math.abs(ai.vy);
-  }
-
-  if (ai.y > 0.55 * H) {
-    ai.y = 0.55 * H;
-    ai.vy = -Math.abs(ai.vy);
-  }
+  if (ai.x < 0.10 * W) { ai.x = 0.10 * W; ai.vx = Math.abs(ai.vx); }
+  if (ai.x > 0.90 * W) { ai.x = 0.90 * W; ai.vx = -Math.abs(ai.vx); }
+  if (ai.y < 0.14 * H) { ai.y = 0.14 * H; ai.vy = Math.abs(ai.vy); }
+  if (ai.y > 0.58 * H) { ai.y = 0.58 * H; ai.vy = -Math.abs(ai.vy); }
 }
 
 function updateManja(dt) {
-  const safeTop = 0.28 * H;
-  const safeBottom = 0.42 * H;
-
-  if (player.y > safeBottom) {
-    // Only being below the safe band drains MANJA.
-    manja -= 0.18 * dt;
-  } else if (player.y >= safeTop) {
-    // Safe-band flying slowly rewards stability without filling too fast.
-    manja += 0.025 * dt;
-  }
-  // Above the safe band is neutral: no automatic MANJA loss or gain.
-
-  manja = Math.max(0, Math.min(1, manja));
+  // MANJA is now tension/skill energy, not an automatic altitude meter.
+  // It changes slowly unless the player actively works DHEEL/KHENCH.
+  manja -= 0.006 * dt;
+  manja = Math.max(0.12, Math.min(1, manja));
 }
 
 // ============================================================
 // 8. STRING-CROSSING AND CUT DETECTION
 // ============================================================
 
-function checkStringCrossing() {
-  if (gameState !== "playing") return;
+function checkStringCrossing(dt) {
+  if (gameState !== "playing" || spawnGrace > 0) return;
 
-  if (spawnGrace > 0) return;
-
-  const dx = player.x - ai.x;
-  const dy = player.y - ai.y;
-
-  const dist = Math.sqrt(dx * dx + dy * dy);
-
-  if (dist > 0.35 * W) return;
-
-  const crossing = segmentsIntersect(
-    boyHandX,
-    boyHandY,
-    player.x,
-    player.y,
-    ai.x,
-    ai.y,
-    W,
-    H
+  const dist = Math.hypot(player.x - ai.x, player.y - ai.y);
+  const crossing = dist < 0.42 * W && segmentsIntersect(
+    boyHandX, boyHandY, player.x, player.y,
+    ai.x, ai.y, W, H
   );
 
-  if (!crossing) return;
+  if (!crossing) {
+    contactTime = Math.max(0, contactTime - dt * 1.8);
+    return;
+  }
 
-  const stringDX = player.x - boyHandX;
-  const stringDY = player.y - boyHandY;
+  contactTime += dt;
 
-  const playerStrLen = Math.sqrt(
-    stringDX * stringDX +
-    stringDY * stringDY
-  );
+  if (timeAccumulator - lastPluckTime >= 0.42) {
+    playPluck(0.95 + Math.random() * 0.15);
+  }
 
-  if (playerStrLen < 0.15 * H) return;
+  // A cut requires actual input. Hands-off play can never clear a level.
+  if (playerActionScore < 2 || contactTime < 0.28) return;
 
-  const aiSharp = Math.min(
-    0.85,
-    0.30 + (level - 1) * 0.04
-  );
+  const difficulty = Math.min(1, (level - 1) / (MAX_LEVEL - 1));
+  const playerPower = manja + Math.min(0.24, playerActionScore * 0.025);
+  const aiPower = 0.42 + difficulty * 0.28 + Math.random() * 0.16;
 
-  if (manja > aiSharp + 0.08) {
+  if (playerPower >= aiPower) {
     cutAI();
     beginKatching("ai");
-    return;
-  }
-
-  if (manja < aiSharp - 0.08) {
+  } else {
     cutPlayer();
     beginKatching("player");
-    return;
-  }
-
-  // Similar string sharpness: brushing without a cut.
-
-  if (timeAccumulator - lastPluckTime >= 0.45) {
-    playPluck(1.0);
   }
 }
 
@@ -867,7 +790,8 @@ function updatePlaying(dt) {
 
   if (levelTimeLeft <= 0) {
     levelTimeLeft = 0;
-    beginLevelFail("TIME OUT");
+    // No passive win: surviving without winning the conflict is a retry.
+    beginLevelFail(playerActionScore === 0 ? "TAKE CONTROL!" : "TIME OUT");
     return;
   }
 
@@ -880,7 +804,7 @@ function updatePlaying(dt) {
     return;
   }
 
-  checkStringCrossing();
+  checkStringCrossing(dt);
 }
 
 function updateKatching(dt) {
@@ -921,14 +845,15 @@ function updateLevelClear(dt) {
   stateTimer -= dt;
 
   if (stateTimer <= 0) {
-    resetLevel(level + 1);
-    transitionState("playing");
-
-    pushPrompt(
-      "LEVEL " + level,
-      "#FFD700",
-      1.2
-    );
+    if (level >= MAX_LEVEL) {
+      resetLevel(1);
+      transitionState("playing");
+      pushPrompt("105 LEVELS COMPLETE!", "#FFD700", 1.8);
+    } else {
+      resetLevel(level + 1);
+      transitionState("playing");
+      pushPrompt("LEVEL " + level + " / " + MAX_LEVEL, "#FFD700", 1.0);
+    }
   }
 }
 
@@ -956,7 +881,6 @@ function render() {
 
   if (gameState === "home") {
     renderHome();
-    renderDebugLine();
     return;
   }
 
@@ -1005,9 +929,6 @@ function render() {
   }
 
   renderPrompts();
-
-  // Always the final visual layer.
-  renderDebugLine();
 }
 
 function renderHome() {
@@ -1061,7 +982,7 @@ function renderHome() {
   ctx.fillStyle = "#FFFAEB";
 
   ctx.strokeText(
-    "A Kite Fight",
+    "105 Kite Battles",
     W * 0.5,
     H * 0.42,
     W * 0.9
@@ -1113,7 +1034,7 @@ function renderHome() {
   ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(0,0,0,0.7)";
 
-  const instruction = "DHEEL to climb · KHENCH to dive";
+  const instruction = "DHEEL to release · KHENCH to pull · win the clash";
 
   ctx.strokeText(
     instruction,
@@ -1304,7 +1225,7 @@ function renderHUD() {
     pillY,
     0.22 * W,
     pillH,
-    "LVL " + level,
+    "LVL " + level + "/" + MAX_LEVEL,
     "#FF1493",
     "#FFFFFF"
   );
