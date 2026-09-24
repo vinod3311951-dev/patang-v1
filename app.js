@@ -1,5 +1,5 @@
-// PATANG_VERSION: 3.2.0
-// LAST_MAJOR_CHANGE: Root-cause fix for freeze on cut, state and frame debug line added
+// PATANG_VERSION: 3.3.0
+// LAST_MAJOR_CHANGE: Forensic fix for KAT GAI freeze — state transition now precedes transition-side audio
 "use strict";
 
 const canvas=document.getElementById("gameCanvas");
@@ -580,7 +580,7 @@ function transitionState(nextState){
   const oldState=gameState;
   if(oldState===nextState){return;}
   gameState=nextState;
-  console.log("State:",oldState,"->",nextState);
+  console.log("STATE TRANSITION:",oldState,"->",nextState,"at frame",frameCount);
   if(nextState==="playing"){startAmbience();scheduleAmbient();}else{stopAmbience();}
 }
 
@@ -596,8 +596,8 @@ function beginKatching(result){
 // Start explicit level clear.
 function beginLevelClear(){
   stateTimer=2;
-  startBumper();
   transitionState("levelClear");
+  startBumper();
 }
 
 // Start explicit level fail.
@@ -607,8 +607,8 @@ function beginLevelFail(reason){
   outcome.active=true;
   outcome.type=reason;
   outcome.time=2;
-  playPluck(.55,.50);
   transitionState("levelFail");
+  playPluck(.55,.50);
 }
 
 // Update explicit RAF state timers.
@@ -1131,7 +1131,7 @@ function drawFrame(){
   ctx.font="10px monospace";
   ctx.textAlign="left";
   ctx.textBaseline="bottom";
-  ctx.fillText("state: "+gameState+"  frames: "+frameCount,6,H()-6);
+  ctx.fillText("state:"+gameState+" frames:"+frameCount+" katchTimer:"+(gameState==="katching"?stateTimer.toFixed(3):"-"),6,H()-6);
   ctx.restore();
 }
 
