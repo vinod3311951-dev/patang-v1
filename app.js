@@ -1,5 +1,5 @@
-// PATANG_VERSION: 2.2.1
-// LAST_MAJOR_CHANGE: Fix v2.2 frozen RAF regression; harden RAF/layout/assets/audio guards
+// PATANG_VERSION: 2.3.0
+// LAST_MAJOR_CHANGE: Both threads black, minimal ambience (water/sparrows/crows), prompt sound debug line, AI kite off-screen string
 "use strict";
 
 const canvas=document.getElementById("gameCanvas");
@@ -9,8 +9,8 @@ const layout={handX:0,handY:0,kiteMinX:0,kiteMaxX:0,kiteMinY:0,kiteMaxY:0,string
 const prompts=[];
 const player={x:0,y:0,vx:80,vy:0,rotation:0,direction:1};
 const ai={x:0,y:0,vx:0,vy:0,rotation:0,state:"neutral",diveTime:0,nextDive:12,hit:false};
-const ambient={rustle:null,rustleFilter:null,rustleGain:null,rustleLfo:null,rustleLfoGain:null,water:null,waterFilter:null,waterGain:null,waterLfo:null,waterLfoGain:null,bird:0,wash:0,splash:0,bellRing:0,horn:0,vendor:0,kids:0,temple:0};
-let assetsReady=false,assetError=false,mode="home",paused=false,level=1,timer=58,tension=.25,zone="green",clock=0,last=performance.now(),audioCtx=null,levelCutTriggered=false;
+const ambient={water:null,waterFilter:null,waterGain:null,waterLfo:null,waterLfoGain:null,bird:0,crow:0};
+let assetsReady=false,assetError=false,mode="home",paused=false,level=1,timer=58,tension=.25,zone="green",clock=0,last=performance.now(),audioCtx=null,levelCutTriggered=false,lastSoundName="none";
 
 // Return canvas width.
 function W(){
@@ -55,7 +55,7 @@ function recomputeLayout(){
   if(canvas.width===0||canvas.height===0){return;}
   const sceneAspect=1536/864;
   const canvasAspect=canvas.width/canvas.height;
-  layout.handX=canvas.width*.47;
+  layout.handX=canvas.width*.53;
   layout.handY=canvas.height*.60;
   layout.kiteMinX=canvas.width*.10;
   layout.kiteMaxX=canvas.width*.90;
@@ -124,7 +124,8 @@ function startGame(){
 
 // Log every sound trigger.
 function logSfx(name){
-  console.log("SFX:",name,"ctx=",audioCtx?audioCtx.state:"null");
+  lastSoundName=name;
+  console.log('SFX triggered:',name,'audioCtx.state =',audioCtx?audioCtx.state:'null');
 }
 
 // Play a self-cleaning oscillator tone.
@@ -227,119 +228,30 @@ function sfxBird(){
   tone("sparrow","sine",2500,.08,.04,3500,0);
 }
 
-// Play a filtered noise burst.
-function noiseBurst(name,duration,gainValue,filterType,frequency){
-  logSfx(name);
-  if(!audioCtx||audioCtx.state!=="running"){return;}
+// Play crow caw.
+function sfxCrow(){
+  if(!audioCtx){return;}
+  logSfx("crow");
+  if(audioCtx.state!=="running"){return;}
   const now=audioCtx.currentTime;
-  const source=audioCtx.createBufferSource();
-  const filter=audioCtx.createBiquadFilter();
-  const gain=audioCtx.createGain();
-  source.buffer=noiseBuffer(duration,false);
-  filter.type=filterType;
-  filter.frequency.value=frequency;
-  gain.gain.setValueAtTime(gainValue,now);
-  gain.gain.exponentialRampToValueAtTime(.0001,now+duration);
-  source.connect(filter);
-  filter.connect(gain);
-  gain.connect(audioCtx.destination);
-  source.onended=function noiseBurstEnded(){source.disconnect();filter.disconnect();gain.disconnect();};
-  source.start(now);
-  source.stop(now+duration);
+  const o=audioCtx.createOscillator();
+  const g=audioCtx.createGain();
+  o.type="sawtooth";
+  o.frequency.setValueAtTime(400,now);
+  g.gain.setValueAtTime(.0001,now);
+  g.gain.linearRampToValueAtTime(.03,now+.015);
+  g.gain.exponentialRampToValueAtTime(.0001,now+.20);
+  o.connect(g);
+  g.connect(audioCtx.destination);
+  o.onended=function crowEnded(){o.disconnect();g.disconnect();};
+  o.start(now);
+  o.stop(now+.20);
 }
 
-// Play dhobi-ghat washing slap.
-function sfxWash(){
-  if(!audioCtx){return;}
-  noiseBurst("dhobi wash",.12,.025,"bandpass",700);
-}
-
-// Play dhobi-ghat splash.
-function sfxSplash(){
-  if(!audioCtx){return;}
-  noiseBurst("water splash",.18,.02,"highpass",900);
-}
-
-// Play cow or bull neck bells.
-function sfxNeckBell(){
-  if(!audioCtx){return;}
-  tone("neck bell 800","sine",800,.4,.03,null,0);
-  tone("neck bell 1200","sine",1200,.4,.02,null,.01);
-  tone("neck bell 1600","sine",1600,.4,.015,null,.02);
-}
-
-// Play distant car horn.
-function sfxHorn(){
-  if(!audioCtx){return;}
-  tone("car horn 350","sine",350,.2,.02,null,0);
-  tone("car horn 440","sine",440,.2,.02,null,.2);
-}
-
-// Play muffled vendor call.
-function sfxVendor(){
-  if(!audioCtx){return;}
-  logSfx("vendor call");
-  if(!audioCtx||audioCtx.state!=="running"){return;}
-  const now=audioCtx.currentTime;
-  const oscillator=audioCtx.createOscillator();
-  const filter=audioCtx.createBiquadFilter();
-  const gain=audioCtx.createGain();
-  oscillator.type="sine";
-  oscillator.frequency.value=200;
-  filter.type="lowpass";
-  filter.frequency.value=350;
-  gain.gain.setValueAtTime(.015,now);
-  gain.gain.exponentialRampToValueAtTime(.0001,now+.9);
-  oscillator.connect(filter);
-  filter.connect(gain);
-  gain.connect(audioCtx.destination);
-  oscillator.onended=function vendorEnded(){oscillator.disconnect();filter.disconnect();gain.disconnect();};
-  oscillator.start(now);
-  oscillator.stop(now+.9);
-}
-
-// Play kids shouting.
-function sfxKids(){
-  if(!audioCtx){return;}
-  tone("kids 300","triangle",300,.2,.02,null,0);
-  tone("kids 500","triangle",500,.2,.02,null,0);
-}
-
-// Play temple bell.
-function sfxTempleBell(){
-  if(!audioCtx){return;}
-  tone("temple bell","sine",528,2,.015,null,0);
-}
-
-// Start continuous rustling trees and flowing water.
+// Start continuous flowing water.
 function startAmbience(){
-  if(!audioCtx||audioCtx.state!=="running"||ambient.rustle||paused||mode!=="playing"){return;}
+  if(!audioCtx||audioCtx.state!=="running"||ambient.water||paused||mode!=="playing"){return;}
   const now=audioCtx.currentTime;
-  const rustle=audioCtx.createBufferSource();
-  const rustleFilter=audioCtx.createBiquadFilter();
-  const rustleGain=audioCtx.createGain();
-  const rustleLfo=audioCtx.createOscillator();
-  const rustleLfoGain=audioCtx.createGain();
-  rustle.buffer=noiseBuffer(3,true);
-  rustle.loop=true;
-  rustleFilter.type="lowpass";
-  rustleFilter.frequency.value=500;
-  rustleGain.gain.value=.03;
-  rustleLfo.frequency.value=.12;
-  rustleLfoGain.gain.value=.01;
-  rustle.connect(rustleFilter);
-  rustleFilter.connect(rustleGain);
-  rustleGain.connect(audioCtx.destination);
-  rustleLfo.connect(rustleLfoGain);
-  rustleLfoGain.connect(rustleGain.gain);
-  rustle.start(now);
-  rustleLfo.start(now);
-  ambient.rustle=rustle;
-  ambient.rustleFilter=rustleFilter;
-  ambient.rustleGain=rustleGain;
-  ambient.rustleLfo=rustleLfo;
-  ambient.rustleLfoGain=rustleLfoGain;
-
   const water=audioCtx.createBufferSource();
   const waterFilter=audioCtx.createBiquadFilter();
   const waterGain=audioCtx.createGain();
@@ -349,9 +261,9 @@ function startAmbience(){
   water.loop=true;
   waterFilter.type="highpass";
   waterFilter.frequency.value=1000;
-  waterGain.gain.value=.02;
+  waterGain.gain.value=.03;
   waterLfo.frequency.value=.08;
-  waterLfoGain.gain.value=.006;
+  waterLfoGain.gain.value=.008;
   water.connect(waterFilter);
   waterFilter.connect(waterGain);
   waterGain.connect(audioCtx.destination);
@@ -366,43 +278,31 @@ function startAmbience(){
   ambient.waterLfoGain=waterLfoGain;
 }
 
-// Stop continuous village ambience.
+// Stop continuous water ambience.
 function stopAmbience(){
-  const sources=["rustle","rustleLfo","water","waterLfo"];
+  const sources=["water","waterLfo"];
   for(let i=0;i<sources.length;i+=1){
     const node=ambient[sources[i]];
     if(node){try{node.stop();}catch(error){}node.disconnect();ambient[sources[i]]=null;}
   }
-  const nodes=["rustleFilter","rustleGain","rustleLfoGain","waterFilter","waterGain","waterLfoGain"];
+  const nodes=["waterFilter","waterGain","waterLfoGain"];
   for(let i=0;i<nodes.length;i+=1){
     const node=ambient[nodes[i]];
     if(node){node.disconnect();ambient[nodes[i]]=null;}
   }
 }
 
-// Schedule all village ambience from the RAF clock.
+// Schedule sparrows and crows from the RAF clock.
 function scheduleAmbient(){
-  ambient.bird=clock+1.5+Math.random()*2.5;
-  ambient.wash=clock+1;
-  ambient.splash=clock+2;
-  ambient.bellRing=clock+4+Math.random()*4;
-  ambient.horn=clock+20+Math.random()*20;
-  ambient.vendor=clock+30+Math.random()*30;
-  ambient.kids=clock+10+Math.random()*15;
-  ambient.temple=clock+60+Math.random()*60;
+  ambient.bird=clock+2+Math.random()*2;
+  ambient.crow=clock+8+Math.random()*12;
 }
 
-// Update all intermittent village ambience from RAF time.
+// Update minimal intermittent ambience from RAF time.
 function updateAmbient(){
   if(!audioCtx){return;}
-  if(clock>=ambient.bird){sfxBird();ambient.bird=clock+1.5+Math.random()*2.5;}
-  if(clock>=ambient.wash){sfxWash();ambient.wash=clock+1;}
-  if(clock>=ambient.splash){sfxSplash();ambient.splash=clock+2;}
-  if(clock>=ambient.bellRing){sfxNeckBell();ambient.bellRing=clock+4+Math.random()*4;}
-  if(clock>=ambient.horn){sfxHorn();ambient.horn=clock+20+Math.random()*20;}
-  if(clock>=ambient.vendor){sfxVendor();ambient.vendor=clock+30+Math.random()*30;}
-  if(clock>=ambient.kids){sfxKids();ambient.kids=clock+10+Math.random()*15;}
-  if(clock>=ambient.temple){sfxTempleBell();ambient.temple=clock+60+Math.random()*60;}
+  if(clock>=ambient.bird){sfxBird();ambient.bird=clock+2+Math.random()*2;}
+  if(clock>=ambient.crow){sfxCrow();ambient.crow=clock+8+Math.random()*12;}
 }
 
 // Queue a canvas prompt.
@@ -577,8 +477,14 @@ function drawScene(){
 
 // Draw dark hairline string.
 function drawString(){
-  ctx.save();ctx.lineWidth=layout.stringWidth;ctx.strokeStyle="rgba(30, 15, 5, 0.85)";ctx.shadowBlur=0;
+  ctx.save();ctx.lineWidth=1/window.devicePixelRatio;ctx.strokeStyle="rgba(0, 0, 0, 0.85)";ctx.shadowBlur=0;
   ctx.beginPath();ctx.moveTo(layout.handX,layout.handY);ctx.lineTo(player.x,player.y);ctx.stroke();ctx.restore();
+}
+
+// Draw AI kite string toward an off-screen flyer.
+function drawAIString(){
+  ctx.save();ctx.lineWidth=1/window.devicePixelRatio;ctx.strokeStyle="rgba(0, 0, 0, 0.85)";ctx.shadowBlur=0;
+  ctx.beginPath();ctx.moveTo(ai.x,ai.y);ctx.lineTo(canvas.width*1.0,canvas.height*1.0);ctx.stroke();ctx.restore();
 }
 
 // Draw shared diamond kite.
@@ -692,18 +598,35 @@ function drawHome(){
   ctx.fillStyle="#1a2340";ctx.font="900 20px Arial";ctx.fillText(assetsReady?"PLAY":"LOADING…",W()*.5,layout.play.y+layout.play.h/2);
 }
 
+// Draw on-canvas audio diagnostics.
+function drawAudioDebug(){
+  ctx.save();
+  ctx.font="12px monospace";
+  ctx.textAlign="left";
+  ctx.textBaseline="top";
+  ctx.fillStyle="#fff";
+  ctx.strokeStyle="rgba(0,0,0,.8)";
+  ctx.lineWidth=3;
+  const text="AUDIO: "+(audioCtx?audioCtx.state:"null")+"  SFX: "+lastSoundName;
+  ctx.strokeText(text,8,8);
+  ctx.fillText(text,8,8);
+  ctx.restore();
+}
+
 // Render exact mandated stack.
 function drawFrame(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   drawScene();
-  if(mode==="home"){drawHome();return;}
+  if(mode==="home"){drawHome();drawAudioDebug();return;}
   drawString();
+  drawAIString();
   drawAI();
   drawPlayer();
   drawHUD();
   drawDangerBar();
   drawPrompts();
   drawControls();
+  drawAudioDebug();
 }
 
 // Main RAF loop.
