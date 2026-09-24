@@ -1,53 +1,13 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-  <meta name="theme-color" content="#5c6cff">
-  <title>Patang</title>
-  <link rel="stylesheet" href="styles.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Patang</title>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <main id="app">
-    <header id="hud" class="hud hidden" aria-label="Game controls">
-      <div id="levelBadge" class="kite-chip">L1</div>
-      <div class="hud-actions">
-        <button id="muteButton" class="kite-button small" aria-label="Mute">♪</button>
-        <button id="pauseButton" class="kite-button small" aria-label="Pause">Ⅱ</button>
-      </div>
-    </header>
-    <div id="statusBar" class="status hidden" aria-live="polite"></div>
-    <canvas id="gameCanvas" aria-label="Patang kite duel game"></canvas>
-    <section id="startScreen" class="screen">
-      <div class="brand-kite" aria-hidden="true"></div>
-      <h1>Patang</h1>
-      <p>Feel the wind. Cross the line.</p>
-      <button id="playButton" class="kite-button play">PLAY</button>
-      <button id="levelsButton" class="text-button">Choose Level</button>
-    </section>
-    <section id="levelScreen" class="screen hidden" aria-label="Level select">
-      <h2>Choose Your Sky</h2>
-      <p>All 100 levels are open.</p>
-      <div id="levelGrid" class="level-grid"></div>
-      <button id="levelBackButton" class="text-button">Back</button>
-    </section>
-    <section id="pauseModal" class="modal hidden" role="dialog" aria-modal="true">
-      <div class="kite-card">
-        <h2>Paused</h2>
-        <button id="resumeButton" class="kite-button action">Resume</button>
-        <button id="homeButton" class="text-button">Home</button>
-      </div>
-    </section>
-    <section id="resultModal" class="modal hidden" role="dialog" aria-modal="true">
-      <div class="kite-card">
-        <h2 id="resultTitle">WOH KAATA!</h2>
-        <p id="resultDetail"></p>
-        <div id="resultStars" class="stars">☆☆☆</div>
-        <button id="retryButton" class="kite-button action">Retry</button>
-        <button id="resultLevelsButton" class="text-button">Levels</button>
-      </div>
-    </section>
-  </main>
-  <script src="app.js"></script>
+<canvas id="gameCanvas"></canvas>
+<script src="app.js"></script>
 </body>
 </html>
