@@ -74,6 +74,7 @@ let audioKatGai = null;
 let audioManjaGaya = null;
 
 let audioInitialized = false;
+let hindiVoice = null;
 
 let dheelZone = null;
 let khenchZone = null;
@@ -212,6 +213,14 @@ function initAudio() {
   if (audioInitialized) return;
 
   audioInitialized = true;
+  if ("speechSynthesis" in window) {
+    const selectHindiVoice = () => {
+      const voices = window.speechSynthesis.getVoices();
+      hindiVoice = voices.find(v => /^hi[-_]/i.test(v.lang)) || voices.find(v => /^hi$/i.test(v.lang)) || null;
+    };
+    selectHindiVoice();
+    window.speechSynthesis.addEventListener("voiceschanged", selectHindiVoice);
+  }
 
   // Eight independent HTML Audio elements.
   // The four action variants reuse the existing pluck asset.
@@ -279,8 +288,9 @@ function speakHindi(words) {
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(words);
     u.lang = "hi-IN";
-    u.rate = 1.12;
-    u.pitch = 1.05;
+    if (hindiVoice) u.voice = hindiVoice;
+    u.rate = 1.04;
+    u.pitch = 1.12;
     u.volume = 0.95;
     window.speechSynthesis.speak(u);
   } catch (e) {}
@@ -625,14 +635,15 @@ function beginKatching(who) {
 
   stateTimer = 1.5;
 
-  pushPrompt("KAT GAI!", "#FF0000", 1.2);
+  const call = who === "ai" ? (Math.random() < 0.5 ? "KAAT DI!" : "KAT GAYI!") : "MANJHA GAYA!";
+  pushPrompt(call, who === "ai" ? "#00FF65" : "#FF1744", 1.2);
 
   playPluck(1.6);
 
   if (audioKatGai) {
     try { audioKatGai.currentTime = 0; audioKatGai.play().catch(() => {}); } catch (e) {}
   }
-  speakHindi(who === "ai" ? (Math.random() < 0.5 ? "काट दी!" : "कट गई!") : "मांझा गया!");
+  speakHindi(call === "KAAT DI!" ? "काट दी!" : call === "KAT GAYI!" ? "कट गई!" : "मांझा गया!");
 }
 
 function beginLevelClear() {
@@ -934,8 +945,8 @@ function updateLevelClear(dt) {
 
   if (stateTimer <= 0) {
     if (level >= MAX_LEVEL) {
-      resetLevel(1);
-      transitionState("playing");
+      selectedTerminal = TERMINALS.length - 1;
+      transitionState("battleSelect");
       pushPrompt("105 LEVELS COMPLETE!", "#FFD700", 1.8);
     } else {
       resetLevel(level + 1);
