@@ -83,6 +83,7 @@ let homePlayZone = null;
 let homeLevelsZone = null;
 let terminalZones = [];
 let battleZones = [];
+let selectorBackZone = null;
 let selectedTerminal = 0;
 const TERMINALS = [
   { name: "UDAAN", from: 1, to: 15 },
@@ -444,6 +445,7 @@ function handlePointerDown(event) {
     (canvas.height / rect.height);
 
   if (gameState === "battleSelect") {
+    if (inZone(x, y, selectorBackZone)) { transitionState("levelSelect"); return; }
     for (let i = 0; i < battleZones.length; i++) {
       if (inZone(x, y, battleZones[i])) {
         resetLevel(TERMINALS[selectedTerminal].from + i);
@@ -457,6 +459,7 @@ function handlePointerDown(event) {
   }
 
   if (gameState === "levelSelect") {
+    if (inZone(x, y, selectorBackZone)) { transitionState("home"); return; }
     for (let i = 0; i < terminalZones.length; i++) {
       if (inZone(x, y, terminalZones[i])) {
         selectedTerminal = i;
@@ -1026,6 +1029,15 @@ function render() {
   renderPrompts();
 }
 
+function renderSelectorBack() {
+  selectorBackZone = { x: W*0.035, y: H*0.035, w: W*0.22, h: H*0.065 };
+  const b=selectorBackZone;
+  roundedRectPath(ctx,b.x,b.y,b.w,b.h,12);
+  ctx.fillStyle="#20232BCC"; ctx.fill(); ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.stroke();
+  ctx.fillStyle="#fff"; ctx.font="bold 16px Arial, sans-serif";
+  ctx.fillText("‹ BACK",b.x+b.w/2,b.y+b.h/2);
+}
+
 function renderBattleSelect() {
   ctx.clearRect(0,0,W,H); ctx.fillStyle="#C88A4A"; ctx.fillRect(0,0,W,H);
   if(sceneReady){ctx.save();ctx.globalAlpha=0.3;ctx.drawImage(sceneImage,coverX,coverY,coverW,coverH);ctx.restore();}
@@ -1041,7 +1053,8 @@ function renderBattleSelect() {
     roundedRectPath(ctx,x,y,size,size,13);ctx.fillStyle=["#FF1493","#FF8C00","#00A86B"][col];ctx.fill();ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.stroke();
     ctx.fillStyle="#fff";ctx.font='bold 24px "Arial Black", Arial, sans-serif';ctx.fillText(String(t.from+i),x+size/2,y+size/2);
   }
-  ctx.fillStyle="#fff";ctx.font="bold 13px Arial, sans-serif";ctx.fillText("ALL BATTLES UNLOCKED • Tap outside to go back",W/2,H*0.97,W*0.95);
+  ctx.fillStyle="#fff";ctx.font="bold 13px Arial, sans-serif";ctx.fillText("ALL 15 BATTLES UNLOCKED",W/2,H*0.97,W*0.95);
+  renderSelectorBack();
   ctx.restore();
 }
 
@@ -1063,7 +1076,8 @@ function renderLevelSelect() {
     ctx.fillStyle="#fff"; ctx.font='bold 20px "Arial Black", Arial, sans-serif'; ctx.fillText((i+1)+". "+t.name, W*0.5, z.y+z.h*0.38);
     ctx.font="bold 12px Arial, sans-serif"; ctx.fillText("LEVELS "+t.from+"–"+t.to, W*0.5, z.y+z.h*0.72);
   }
-  ctx.font="bold 13px Arial, sans-serif"; ctx.fillStyle="#fff"; ctx.fillText("Tap a terminal to enter • tap outside to go back",W*0.5,H*0.91,W*0.92);
+  ctx.font="bold 13px Arial, sans-serif"; ctx.fillStyle="#fff"; ctx.fillText("TAP A TERMINAL TO ENTER",W*0.5,H*0.91,W*0.92);
+  renderSelectorBack();
   ctx.restore();
 }
 
