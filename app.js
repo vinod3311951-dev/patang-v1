@@ -1,16 +1,16 @@
-// PATANG_VERSION: 2.0.0
-// LAST_MAJOR_CHANGE: Complete rebuild — working audio, readable prompts, correct string anchor, full ambient environment
+// PATANG_VERSION: 2.2.0
+// LAST_MAJOR_CHANGE: Portrait fill, kite clamp, KAT GAI once, small prompts, string fix, village ambience, rectangular buttons
 "use strict";
 
 const canvas=document.getElementById("gameCanvas");
 const ctx=canvas.getContext("2d");
 const sceneImage=new Image();
-const layout={handX:0,handY:0,kiteMinX:0,kiteMaxX:0,kiteMinY:0,kiteMaxY:0,stringWidth:1,play:{},dheel:{},khench:{},pause:{}};
+const layout={handX:0,handY:0,kiteMinX:0,kiteMaxX:0,kiteMinY:0,kiteMaxY:0,stringWidth:1,sceneX:0,sceneY:0,sceneW:0,sceneH:0,play:{},dheel:{},khench:{},pause:{}};
 const prompts=[];
 const player={x:0,y:0,vx:80,vy:0,rotation:0,direction:1};
 const ai={x:0,y:0,vx:0,vy:0,rotation:0,state:"neutral",diveTime:0,nextDive:12,hit:false};
-const ambient={wind:null,filter:null,gain:null,bird:0,horn:0,vendor:0,kids:0,bell:0};
-let assetsReady=false,assetError=false,mode="home",paused=false,level=1,timer=58,tension=.25,zone="green",clock=0,last=performance.now(),audioCtx=null,warningClock=0,dangerClock=0,stateText=null;
+const ambient={rustle:null,rustleFilter:null,rustleGain:null,rustleLfo:null,rustleLfoGain:null,water:null,waterFilter:null,waterGain:null,waterLfo:null,waterLfoGain:null,bird:0,wash:0,splash:0,bellRing:0,horn:0,vendor:0,kids:0,temple:0};
+let assetsReady=false,assetError=false,mode="home",paused=false,level=1,timer=58,tension=.25,zone="green",clock=0,last=performance.now(),audioCtx=null,levelCutTriggered=false;
 
 // Return canvas width.
 function W(){
@@ -52,18 +52,29 @@ function pollCanvasSize(){
 
 // Recompute anchors and hit zones.
 function recomputeLayout(){
-  const BOY_HAND_X=canvas.width*.50;
-  const BOY_HAND_Y=canvas.height*.60;
-  layout.handX=BOY_HAND_X;
-  layout.handY=BOY_HAND_Y;
+  const sceneAspect=1536/864;
+  const canvasAspect=canvas.width/canvas.height;
+  layout.handX=canvas.width*.47;
+  layout.handY=canvas.height*.60;
   layout.kiteMinX=canvas.width*.10;
   layout.kiteMaxX=canvas.width*.90;
-  layout.kiteMinY=canvas.height*.10;
-  layout.kiteMaxY=canvas.height*.48;
+  layout.kiteMinY=canvas.height*.16;
+  layout.kiteMaxY=canvas.height*.52;
+  if(canvasAspect<sceneAspect){
+    layout.sceneH=canvas.height;
+    layout.sceneW=canvas.height*sceneAspect;
+    layout.sceneX=(canvas.width-layout.sceneW)/2;
+    layout.sceneY=0;
+  }else{
+    layout.sceneW=canvas.width;
+    layout.sceneH=canvas.width/sceneAspect;
+    layout.sceneX=0;
+    layout.sceneY=(canvas.height-layout.sceneH)/2;
+  }
   layout.stringWidth=1/window.devicePixelRatio;
   layout.play={x:W()*.5-92,y:H()*.68-31,w:184,h:62};
-  layout.dheel={x:W()*.22-53,y:H()*.86-53,w:106,h:106};
-  layout.khench={x:W()*.50-53,y:H()*.86-53,w:106,h:106};
+  layout.dheel={x:W()*.06,y:H()*.88,w:140,h:70};
+  layout.khench={x:W()*.56,y:H()*.88,w:140,h:70};
   layout.pause={x:W()-54,y:14,w:40,h:40};
   if(mode==="home"){resetPlayer();resetAI();}
 }
@@ -105,8 +116,8 @@ function resetAI(){
 // Start gameplay.
 function startGame(){
   if(!assetsReady){return;}
-  mode="playing";paused=false;timer=levelDuration(level);tension=.25;zone="green";clock=0;warningClock=0;dangerClock=0;prompts.length=0;stateText=null;
-  resetPlayer();resetAI();scheduleAmbient();startWind();
+  mode="playing";paused=false;timer=levelDuration(level);tension=.25;zone="green";clock=0;levelCutTriggered=false;prompts.length=0;
+  resetPlayer();resetAI();scheduleAmbient();startAmbience();
 }
 
 // Log every sound trigger.
@@ -202,71 +213,177 @@ function sfxFail(){
 
 // Play sparrow chirp.
 function sfxBird(){
-  tone("sparrow","sine",2500,.06,.03,3500,0);
+  tone("sparrow","sine",2500,.08,.04,3500,0);
+}
+
+// Play a filtered noise burst.
+function noiseBurst(name,duration,gainValue,filterType,frequency){
+  logSfx(name);
+  if(!audioCtx||audioCtx.state!=="running"){return;}
+  const now=audioCtx.currentTime;
+  const source=audioCtx.createBufferSource();
+  const filter=audioCtx.createBiquadFilter();
+  const gain=audioCtx.createGain();
+  source.buffer=noiseBuffer(duration,false);
+  filter.type=filterType;
+  filter.frequency.value=frequency;
+  gain.gain.setValueAtTime(gainValue,now);
+  gain.gain.exponentialRampToValueAtTime(.0001,now+duration);
+  source.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioCtx.destination);
+  source.onended=function noiseBurstEnded(){source.disconnect();filter.disconnect();gain.disconnect();};
+  source.start(now);
+  source.stop(now+duration);
+}
+
+// Play dhobi-ghat washing slap.
+function sfxWash(){
+  noiseBurst("dhobi wash",.12,.025,"bandpass",700);
+}
+
+// Play dhobi-ghat splash.
+function sfxSplash(){
+  noiseBurst("water splash",.18,.02,"highpass",900);
+}
+
+// Play cow or bull neck bells.
+function sfxNeckBell(){
+  tone("neck bell 800","sine",800,.4,.03,null,0);
+  tone("neck bell 1200","sine",1200,.4,.02,null,.01);
+  tone("neck bell 1600","sine",1600,.4,.015,null,.02);
 }
 
 // Play distant car horn.
 function sfxHorn(){
-  tone("car horn 350","sine",350,.20,.025,null,0);
-  tone("car horn 440","sine",440,.20,.025,null,.20);
+  tone("car horn 350","sine",350,.2,.02,null,0);
+  tone("car horn 440","sine",440,.2,.02,null,.2);
 }
 
-// Play vendor call hum.
+// Play muffled vendor call.
 function sfxVendor(){
-  logSfx("vendor chai");
+  logSfx("vendor call");
   if(!audioCtx||audioCtx.state!=="running"){return;}
-  const now=audioCtx.currentTime,o=audioCtx.createOscillator(),f=audioCtx.createBiquadFilter(),g=audioCtx.createGain();
-  o.type="sawtooth";o.frequency.setValueAtTime(200,now);o.frequency.linearRampToValueAtTime(230,now+.45);o.frequency.linearRampToValueAtTime(190,now+.9);
-  f.type="lowpass";f.frequency.value=350;g.gain.setValueAtTime(.02,now);g.gain.exponentialRampToValueAtTime(.0001,now+.9);
-  o.connect(f);f.connect(g);g.connect(audioCtx.destination);
-  o.onended=function vendorEnded(){o.disconnect();f.disconnect();g.disconnect();};
-  o.start(now);o.stop(now+.9);
+  const now=audioCtx.currentTime;
+  const oscillator=audioCtx.createOscillator();
+  const filter=audioCtx.createBiquadFilter();
+  const gain=audioCtx.createGain();
+  oscillator.type="sine";
+  oscillator.frequency.value=200;
+  filter.type="lowpass";
+  filter.frequency.value=350;
+  gain.gain.setValueAtTime(.015,now);
+  gain.gain.exponentialRampToValueAtTime(.0001,now+.9);
+  oscillator.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioCtx.destination);
+  oscillator.onended=function vendorEnded(){oscillator.disconnect();filter.disconnect();gain.disconnect();};
+  oscillator.start(now);
+  oscillator.stop(now+.9);
 }
 
-// Play kids shouting tones.
+// Play kids shouting.
 function sfxKids(){
-  tone("kids 300","triangle",300,.10,.02,380,0);
-  tone("kids 500","triangle",500,.10,.02,620,.11);
+  tone("kids 300","triangle",300,.2,.02,null,0);
+  tone("kids 500","triangle",500,.2,.02,null,0);
 }
 
 // Play temple bell.
-function sfxBell(){
-  tone("temple bell","sine",528,2,.02,null,0);
+function sfxTempleBell(){
+  tone("temple bell","sine",528,2,.015,null,0);
 }
 
-// Start continuous mild wind.
-function startWind(){
-  if(!audioCtx||audioCtx.state!=="running"||ambient.wind||paused||mode!=="playing"){return;}
-  logSfx("mild wind start");
-  const s=audioCtx.createBufferSource(),f=audioCtx.createBiquadFilter(),g=audioCtx.createGain();
-  s.buffer=noiseBuffer(2,true);s.loop=true;f.type="lowpass";f.frequency.value=300;g.gain.value=.02;
-  s.connect(f);f.connect(g);g.connect(audioCtx.destination);s.start();
-  ambient.wind=s;ambient.filter=f;ambient.gain=g;
+// Start continuous rustling trees and flowing water.
+function startAmbience(){
+  if(!audioCtx||audioCtx.state!=="running"||ambient.rustle||paused||mode!=="playing"){return;}
+  const now=audioCtx.currentTime;
+  const rustle=audioCtx.createBufferSource();
+  const rustleFilter=audioCtx.createBiquadFilter();
+  const rustleGain=audioCtx.createGain();
+  const rustleLfo=audioCtx.createOscillator();
+  const rustleLfoGain=audioCtx.createGain();
+  rustle.buffer=noiseBuffer(3,true);
+  rustle.loop=true;
+  rustleFilter.type="lowpass";
+  rustleFilter.frequency.value=500;
+  rustleGain.gain.value=.03;
+  rustleLfo.frequency.value=.12;
+  rustleLfoGain.gain.value=.01;
+  rustle.connect(rustleFilter);
+  rustleFilter.connect(rustleGain);
+  rustleGain.connect(audioCtx.destination);
+  rustleLfo.connect(rustleLfoGain);
+  rustleLfoGain.connect(rustleGain.gain);
+  rustle.start(now);
+  rustleLfo.start(now);
+  ambient.rustle=rustle;
+  ambient.rustleFilter=rustleFilter;
+  ambient.rustleGain=rustleGain;
+  ambient.rustleLfo=rustleLfo;
+  ambient.rustleLfoGain=rustleLfoGain;
+
+  const water=audioCtx.createBufferSource();
+  const waterFilter=audioCtx.createBiquadFilter();
+  const waterGain=audioCtx.createGain();
+  const waterLfo=audioCtx.createOscillator();
+  const waterLfoGain=audioCtx.createGain();
+  water.buffer=noiseBuffer(3,false);
+  water.loop=true;
+  waterFilter.type="highpass";
+  waterFilter.frequency.value=1000;
+  waterGain.gain.value=.02;
+  waterLfo.frequency.value=.08;
+  waterLfoGain.gain.value=.006;
+  water.connect(waterFilter);
+  waterFilter.connect(waterGain);
+  waterGain.connect(audioCtx.destination);
+  waterLfo.connect(waterLfoGain);
+  waterLfoGain.connect(waterGain.gain);
+  water.start(now);
+  waterLfo.start(now);
+  ambient.water=water;
+  ambient.waterFilter=waterFilter;
+  ambient.waterGain=waterGain;
+  ambient.waterLfo=waterLfo;
+  ambient.waterLfoGain=waterLfoGain;
 }
 
-// Stop continuous wind.
-function stopWind(){
-  if(ambient.wind){ambient.wind.stop();ambient.wind.disconnect();ambient.wind=null;}
-  if(ambient.filter){ambient.filter.disconnect();ambient.filter=null;}
-  if(ambient.gain){ambient.gain.disconnect();ambient.gain=null;}
+// Stop continuous village ambience.
+function stopAmbience(){
+  const sources=["rustle","rustleLfo","water","waterLfo"];
+  for(let i=0;i<sources.length;i+=1){
+    const node=ambient[sources[i]];
+    if(node){try{node.stop();}catch(error){}node.disconnect();ambient[sources[i]]=null;}
+  }
+  const nodes=["rustleFilter","rustleGain","rustleLfoGain","waterFilter","waterGain","waterLfoGain"];
+  for(let i=0;i<nodes.length;i+=1){
+    const node=ambient[nodes[i]];
+    if(node){node.disconnect();ambient[nodes[i]]=null;}
+  }
 }
 
-// Schedule ambient RAF clocks.
+// Schedule all village ambience from the RAF clock.
 function scheduleAmbient(){
-  ambient.bird=clock+2+Math.random()*3;
-  ambient.horn=clock+15+Math.random()*25;
-  ambient.vendor=clock+20+Math.random()*30;
-  ambient.kids=clock+8+Math.random()*17;
-  ambient.bell=clock+60+Math.random()*60;
+  ambient.bird=clock+1.5+Math.random()*2.5;
+  ambient.wash=clock+1;
+  ambient.splash=clock+2;
+  ambient.bellRing=clock+4+Math.random()*4;
+  ambient.horn=clock+20+Math.random()*20;
+  ambient.vendor=clock+30+Math.random()*30;
+  ambient.kids=clock+10+Math.random()*15;
+  ambient.temple=clock+60+Math.random()*60;
 }
 
-// Update ambient events from RAF time.
+// Update all intermittent village ambience from RAF time.
 function updateAmbient(){
-  if(clock>=ambient.bird){sfxBird();ambient.bird=clock+2+Math.random()*3;}
-  if(clock>=ambient.horn){sfxHorn();ambient.horn=clock+15+Math.random()*25;}
-  if(clock>=ambient.vendor){sfxVendor();ambient.vendor=clock+20+Math.random()*30;}
-  if(clock>=ambient.kids){sfxKids();ambient.kids=clock+8+Math.random()*17;}
-  if(clock>=ambient.bell){sfxBell();ambient.bell=clock+60+Math.random()*60;}
+  if(clock>=ambient.bird){sfxBird();ambient.bird=clock+1.5+Math.random()*2.5;}
+  if(clock>=ambient.wash){sfxWash();ambient.wash=clock+1;}
+  if(clock>=ambient.splash){sfxSplash();ambient.splash=clock+2;}
+  if(clock>=ambient.bellRing){sfxNeckBell();ambient.bellRing=clock+4+Math.random()*4;}
+  if(clock>=ambient.horn){sfxHorn();ambient.horn=clock+20+Math.random()*20;}
+  if(clock>=ambient.vendor){sfxVendor();ambient.vendor=clock+30+Math.random()*30;}
+  if(clock>=ambient.kids){sfxKids();ambient.kids=clock+10+Math.random()*15;}
+  if(clock>=ambient.temple){sfxTempleBell();ambient.temple=clock+60+Math.random()*60;}
 }
 
 // Queue a canvas prompt.
@@ -280,26 +397,25 @@ function updatePrompts(dt){
     prompts[i].timeLeft-=dt;
     if(prompts[i].timeLeft<=0){prompts.splice(i,1);}
   }
-  if(stateText){stateText.timeLeft-=dt;if(stateText.timeLeft<=0){stateText=null;}}
 }
 
 // Apply DHEEL tap.
 function doDheel(){
   if(mode!=="playing"||paused){return;}
-  player.vy=-180;tension=clamp(tension-.04,0,1);sfxDheel();prompt("DHEEL","#00BFFF",36,.7);
+  player.vy=-180;tension=clamp(tension-.04,0,1);sfxDheel();prompt("DHEEL","#00BFFF",26,.8);
 }
 
 // Apply KHENCH tap.
 function doKhench(){
   if(mode!=="playing"||paused){return;}
-  player.vy=180;tension=clamp(tension-.06,0,1);sfxKhench();prompt("KHENCH","#FF3B30",36,.7);
+  player.vy=180;tension=clamp(tension-.06,0,1);sfxKhench();prompt("KHENCH","#FF3B30",26,.8);
 }
 
 // Toggle pause and ambient.
 function togglePause(){
   if(mode!=="playing"){return;}
   paused=!paused;
-  if(paused){stopWind();}else{startWind();scheduleAmbient();}
+  if(paused){stopAmbience();}else{startAmbience();scheduleAmbient();}
 }
 
 // Convert pointer to canvas pixels.
@@ -310,7 +426,8 @@ function pointerPoint(e){
 
 // Test rectangle hit.
 function hit(p,z){
-  return p.x>=z.x&&p.x<=z.x+z.w&&p.y>=z.y&&p.y<=z.y+z.h;
+  const pad=(z===layout.dheel||z===layout.khench)?6:0;
+  return p.x>=z.x-pad&&p.x<=z.x+z.w+pad&&p.y>=z.y-pad&&p.y<=z.y+z.h+pad;
 }
 
 // Handle the sole pointer interaction.
@@ -375,11 +492,14 @@ function updateAI(dt){
   ai.rotation=Math.atan2(ai.vy,ai.vx);
 }
 
-// Cut and reset player without resetting timer.
+// Fire KAT GAI at most once in the current level.
 function cutKite(){
-  sfxKatGai();sfxFail();prompt("KAT GAI!","#FF0000",56,1.5);
-  stateText={text:"KAT GAI!",color:"#FF0000",fontSize:56,timeLeft:1.5};
-  tension=.25;zone="green";resetPlayer();
+  if(levelCutTriggered){tension=1;return;}
+  levelCutTriggered=true;
+  sfxKatGai();
+  prompt("KAT GAI!","#FF0000",38,1.2);
+  tension=.25;
+  zone="green";
 }
 
 // Update danger tension.
@@ -392,8 +512,8 @@ function updateTension(dt){
   tension=clamp(tension,0,1);
   const next=tension>=.85?"red":tension>=.65?"yellow":"green";
   if(next!==zone){
-    if(next==="yellow"){prompt("SAVADHAN","#FFD700",36,1);}
-    if(next==="red"){prompt("KHATRA","#FF4500",36,1.2);}
+    if(next==="yellow"){sfxYellow();prompt("SAVADHAN","#FFD700",26,.8);}
+    if(next==="red"){sfxRed();prompt("KHATRA","#FF4500",26,.8);}
     zone=next;
   }
   if(tension>=1){cutKite();}
@@ -401,16 +521,15 @@ function updateTension(dt){
 
 // Clear and advance level.
 function clearLevel(){
-  sfxClear();prompt("LEVEL CLEAR","#00FF00",56,2);
-  stateText={text:"LEVEL CLEAR",color:"#00FF00",fontSize:56,timeLeft:2};
-  level+=1;timer=levelDuration(level);tension=.25;zone="green";resetPlayer();resetAI();
-}
-
-// Update warning audio pulses.
-function updateWarningAudio(dt){
-  warningClock-=dt;dangerClock-=dt;
-  if(zone==="yellow"&&warningClock<=0){sfxYellow();warningClock=.8;}
-  if(zone==="red"&&dangerClock<=0){sfxRed();dangerClock=.4;}
+  sfxClear();
+  prompt("LEVEL CLEAR","#00FF00",38,1.2);
+  level+=1;
+  timer=levelDuration(level);
+  tension=.25;
+  zone="green";
+  levelCutTriggered=false;
+  resetPlayer();
+  resetAI();
 }
 
 // Update game state.
@@ -418,7 +537,7 @@ function update(dt){
   updatePrompts(dt);
   if(mode!=="playing"||paused){return;}
   clock+=dt;timer-=dt;
-  updatePlayer(dt);updateAI(dt);updateTension(dt);updateWarningAudio(dt);updateAmbient();
+  updatePlayer(dt);updateAI(dt);updateTension(dt);updateAmbient();
   if(timer<=0){clearLevel();}
 }
 
@@ -429,12 +548,12 @@ function drawFallback(){
   ctx.fillText(assetError?"Scene unavailable":"Loading scene…",W()/2,H()/2);
 }
 
-// Draw scene letterboxed.
+// Draw scene with cover fit.
 function drawScene(){
+  ctx.fillStyle="#C88A4A";
+  ctx.fillRect(0,0,W(),H());
   if(!assetsReady){drawFallback();return;}
-  ctx.fillStyle="#C88A4A";ctx.fillRect(0,0,W(),H());
-  const s=Math.min(W()/sceneImage.naturalWidth,H()/sceneImage.naturalHeight),dw=sceneImage.naturalWidth*s,dh=sceneImage.naturalHeight*s;
-  ctx.drawImage(sceneImage,(W()-dw)/2,(H()-dh)/2,dw,dh);
+  ctx.drawImage(sceneImage,layout.sceneX,layout.sceneY,layout.sceneW,layout.sceneH);
 }
 
 // Draw dark hairline string.
@@ -504,32 +623,46 @@ function drawDangerBar(){
 // Draw high-contrast prompts.
 function drawPrompts(){
   for(let i=0;i<prompts.length;i+=1){
-    const p=prompts[i],alpha=clamp(p.timeLeft/Math.min(.35,p.duration),0,1);
-    ctx.save();ctx.globalAlpha=alpha;ctx.font="900 "+p.fontSize+"px 'Arial Black',Arial,sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
-    ctx.lineWidth=6;ctx.strokeStyle="#000";ctx.shadowColor="#000";ctx.shadowBlur=12;ctx.strokeText(p.text,W()*.5,H()*.35+i*42);
-    ctx.fillStyle=p.color;ctx.fillText(p.text,W()*.5,H()*.35+i*42);ctx.restore();
+    const p=prompts[i];
+    const alpha=clamp(p.timeLeft/Math.min(.25,p.duration),0,1);
+    ctx.save();
+    ctx.globalAlpha=alpha;
+    ctx.font="900 "+p.fontSize+"px 'Arial Black',sans-serif";
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
+    ctx.lineWidth=4;
+    ctx.strokeStyle="#000";
+    ctx.shadowColor="#000";
+    ctx.shadowBlur=8;
+    ctx.strokeText(p.text,W()*.5,H()*.20);
+    ctx.fillStyle=p.color;
+    ctx.fillText(p.text,W()*.5,H()*.20);
+    ctx.restore();
   }
 }
 
-// Draw one diamond control.
-function control(cx,cy,fill,arrow,label){
-  ctx.save();ctx.translate(cx,cy);ctx.rotate(Math.PI/4);ctx.fillStyle=fill;ctx.fillRect(-45,-45,90,90);ctx.rotate(-Math.PI/4);
-  ctx.fillStyle="#fff";ctx.textAlign="center";ctx.textBaseline="middle";ctx.font="900 25px Arial";ctx.fillText(arrow,0,-11);
-  ctx.font="900 11px Arial";ctx.fillText(label,0,15);ctx.restore();
+// Draw one rounded rectangular control.
+function control(rect,fill,arrow,label){
+  ctx.save();
+  ctx.fillStyle=fill;
+  ctx.strokeStyle="#fff";
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.roundRect(rect.x,rect.y,rect.w,rect.h,8);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle="#fff";
+  ctx.textAlign="center";
+  ctx.textBaseline="middle";
+  ctx.font="700 22px Arial";
+  ctx.fillText(arrow+" "+label,rect.x+rect.w/2,rect.y+rect.h/2);
+  ctx.restore();
 }
 
 // Draw bottom controls.
 function drawControls(){
-  control(W()*.22,H()*.86,"#2196F3","↑","DHEEL");
-  control(W()*.50,H()*.86,"#E53935","↓","KHENCH");
-}
-
-// Draw active game-state text.
-function drawStateText(){
-  if(!stateText){return;}
-  ctx.save();ctx.globalAlpha=clamp(stateText.timeLeft/.35,0,1);ctx.font="900 "+stateText.fontSize+"px 'Arial Black',Arial,sans-serif";
-  ctx.textAlign="center";ctx.textBaseline="middle";ctx.lineWidth=7;ctx.strokeStyle="#000";ctx.shadowColor="#000";ctx.shadowBlur=12;
-  ctx.strokeText(stateText.text,W()*.5,H()*.47);ctx.fillStyle=stateText.color;ctx.fillText(stateText.text,W()*.5,H()*.47);ctx.restore();
+  control(layout.dheel,"#2196F3","↑","DHEEL");
+  control(layout.khench,"#E53935","↓","KHENCH");
 }
 
 // Draw canvas home.
@@ -564,7 +697,7 @@ function gameLoop(now){
 
 // Pause when page is hidden.
 function visibilityChanged(){
-  if(document.hidden&&mode==="playing"&&!paused){paused=true;stopWind();}
+  if(document.hidden&&mode==="playing"&&!paused){paused=true;stopAmbience();}
 }
 
 // Bind canvas pointer input.
