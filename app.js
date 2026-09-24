@@ -1,5 +1,5 @@
-// PATANG_VERSION: 3.3.0
-// LAST_MAJOR_CHANGE: Forensic fix for KAT GAI freeze — state transition now precedes transition-side audio
+// PATANG_VERSION: 3.5.0
+// LAST_MAJOR_CHANGE: Forensic level-start freeze fix, exhaustive console logging at level init and RAF start, readable on-canvas frame counter
 "use strict";
 
 const canvas=document.getElementById("gameCanvas");
@@ -24,7 +24,7 @@ let stateTimer=0;
 let frameCount=0;
 let failReason="";
 let level=1;
-let timer=60;
+let levelTimeLeft=60;
 let tension=.25;
 let clock=0;
 let last=performance.now();
@@ -193,13 +193,17 @@ function resetEffects(){
 
 // Start or retry the current level.
 function startLevel(){
-  timer=levelDuration(level);
+  console.log("LEVEL START: init entered");
+  frameCount=0;
+  levelTimeLeft=levelDuration(level);
   tension=.25;
   clock=0;
   resetEffects();
   resetPlayer();
   resetAI();
+  console.log("LEVEL START: kites initialized");
   scheduleAmbient();
+  console.log("LEVEL START: entering playing state");
   transitionState("playing");
   startAmbience();
 }
@@ -721,7 +725,7 @@ function update(dt){
   if(gameState!=="playing"){updateStateMachine(dt);return;}
   if(paused){return;}
   clock+=dt;
-  timer=Math.max(0,timer-dt);
+  levelTimeLeft=Math.max(0,levelTimeLeft-dt);
   updatePlayer(dt);
   updateAI(dt);
   updateTension(dt);
@@ -729,7 +733,7 @@ function update(dt){
   updateSpark(dt);
   updateLooseString(dt);
   checkStringCombat();
-  if(timer<=0&&!player.cut&&!ai.cut){
+  if(levelTimeLeft<=0&&!player.cut&&!ai.cut){
     prompt("TIME OUT","#FF2020",52,1.5);
     beginLevelFail("timeout");
   }
@@ -891,11 +895,26 @@ function drawSpark(){
   ctx.restore();
 }
 
+// Build a rounded rectangle path without relying on CanvasRenderingContext2D.roundRect.
+function roundedRectPath(x,y,w,h,r){
+  const rr=Math.max(0,Math.min(r,Math.abs(w)/2,Math.abs(h)/2));
+  ctx.beginPath();
+  ctx.moveTo(x+rr,y);
+  ctx.lineTo(x+w-rr,y);
+  ctx.quadraticCurveTo(x+w,y,x+w,y+rr);
+  ctx.lineTo(x+w,y+h-rr);
+  ctx.quadraticCurveTo(x+w,y+h,x+w-rr,y+h);
+  ctx.lineTo(x+rr,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-rr);
+  ctx.lineTo(x,y+rr);
+  ctx.quadraticCurveTo(x,y,x+rr,y);
+  ctx.closePath();
+}
+
 // Draw one HUD pill.
 function pill(x,y,w,text){
   ctx.fillStyle="#1a2340";
-  ctx.beginPath();
-  ctx.roundRect(x,y,w,40,20);
+  roundedRectPath(x,y,w,40,20);
   ctx.fill();
   ctx.fillStyle="#fff";
   ctx.font="700 20px Arial";
@@ -904,7 +923,7 @@ function pill(x,y,w,text){
   ctx.fillText(text,x+w/2,y+20);
 }
 
-// Format the timer.
+// Format the levelTimeLeft.
 function formatTime(seconds){
   const n=Math.max(0,Math.ceil(seconds));
   const m=Math.floor(n/60);
@@ -915,10 +934,9 @@ function formatTime(seconds){
 // Draw top HUD.
 function drawHUD(){
   pill(12,12,72,"L"+level);
-  pill(W()/2-50,12,100,formatTime(timer));
+  pill(W()/2-50,12,100,formatTime(levelTimeLeft));
   ctx.fillStyle="#1a2340";
-  ctx.beginPath();
-  ctx.roundRect(layout.pause.x,layout.pause.y,40,40,12);
+  roundedRectPath(layout.pause.x,layout.pause.y,40,40,12);
   ctx.fill();
   ctx.fillStyle="#fff";
   ctx.fillRect(layout.pause.x+13,layout.pause.y+11,4,18);
@@ -931,8 +949,7 @@ function drawTensionBar(){
   const y=66;
   const w=Math.min(210,W()*.52);
   ctx.fillStyle="rgba(26,35,64,.88)";
-  ctx.beginPath();
-  ctx.roundRect(x,y,w,28,14);
+  roundedRectPath(x,y,w,28,14);
   ctx.fill();
   ctx.fillStyle="#fff";
   ctx.font="700 12px Arial";
@@ -974,8 +991,7 @@ function control(rect,fill,arrow,label){
   ctx.fillStyle=fill;
   ctx.strokeStyle="#fff";
   ctx.lineWidth=2;
-  ctx.beginPath();
-  ctx.roundRect(rect.x,rect.y,rect.w,rect.h,8);
+  roundedRectPath(rect.x,rect.y,rect.w,rect.h,8);
   ctx.fill();
   ctx.stroke();
   ctx.fillStyle="#fff";
@@ -1095,8 +1111,7 @@ function drawHome(){
   ctx.font="900 52px 'Arial Black',Arial";
   ctx.fillText("PATANG",W()*.5,H()*.38);
   ctx.fillStyle=assetsReady?"#FFC107":"#777";
-  ctx.beginPath();
-  ctx.roundRect(layout.play.x,layout.play.y,layout.play.w,layout.play.h,20);
+  roundedRectPath(layout.play.x,layout.play.y,layout.play.w,layout.play.h,20);
   ctx.fill();
   ctx.fillStyle="#1a2340";
   ctx.font="900 20px Arial";
@@ -1126,26 +1141,35 @@ function drawFrame(){
   drawBumper();
   drawFail();
   ctx.save();
-  ctx.globalAlpha=.5;
-  ctx.fillStyle="#000";
-  ctx.font="10px monospace";
+  const debugText="state:"+gameState+" frames:"+frameCount+" timer:"+levelTimeLeft.toFixed(2);
+  ctx.font="14px monospace";
   ctx.textAlign="left";
-  ctx.textBaseline="bottom";
-  ctx.fillText("state:"+gameState+" frames:"+frameCount+" katchTimer:"+(gameState==="katching"?stateTimer.toFixed(3):"-"),6,H()-6);
+  ctx.textBaseline="top";
+  const debugWidth=Math.ceil(ctx.measureText(debugText).width)+12;
+  ctx.globalAlpha=.82;
+  ctx.fillStyle="#000";
+  ctx.fillRect(4,4,debugWidth,24);
+  ctx.globalAlpha=1;
+  ctx.fillStyle="#00FF44";
+  ctx.fillText(debugText,10,9);
   ctx.restore();
 }
 
 // Main RAF loop.
 function gameLoop(now){
   try{
+    frameCount++;
+    if(frameCount<=10) console.log("RAF tick "+frameCount+" state="+gameState);
+    if(frameCount===1) console.log("RAF TICK 1: state=" + gameState + " frameCount=" + frameCount);
+    if(frameCount===2) console.log("RAF TICK 2: state=" + gameState + " frameCount=" + frameCount);
+    if(frameCount===10) console.log("RAF TICK 10: state=" + gameState + " frameCount=" + frameCount);
     pollCanvasSize();
     const dt=Math.min(.033,(now-last)/1000||0);
     last=now;
-    frameCount+=1;
     update(dt);
     drawFrame();
   }catch(err){
-    console.error("RAF error at state " + gameState + ":", err.stack || err);
+    console.error("RAF error at state " + gameState + " frame " + frameCount + ":", err.stack || err);
   }
   requestAnimationFrame(gameLoop);
 }
