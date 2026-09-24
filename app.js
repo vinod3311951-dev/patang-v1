@@ -39,8 +39,10 @@ let wind = { x:0, y:0, phase:0 };
 let audioCtx = null;
 let windOsc = null;
 let windGain = null;
-let nextAmbientAt = 9;
-let ambientIndex = 0;
+let sceneTime = 0;
+let ambientSchedule = {};
+let dustMotes = [];
+let nextDustAt = 2.5;
 let timeOfDay = "golden";
 let birds = [];
 let dpr = 1;
@@ -136,7 +138,7 @@ function startGame(level) {
   particles = [];
   ai.state = "watch";
   ai.decisionAt = 0;
-  nextAmbientAt = 8 + Math.random() * 17;
+  resetAmbientSchedule();
   resetPositions();
   hideAllPanels();
   hud.classList.remove("hidden");
@@ -248,27 +250,28 @@ function tone(type, from, to, duration, gain, delay = 0) {
   osc.stop(now + duration + 0.03);
 }
 
-// Play oscillator-only bird chirps.
+// Play one or two oscillator-only bird calls with an occasional answer.
 function soundBirds() {
-  tone("sine", 2050, 2520, 0.08, 0.025, 0);
-  tone("sine", 2250, 2600, 0.08, 0.022, 0.11);
-  tone("sine", 1980, 2380, 0.08, 0.02, 0.22);
+  const answer = Math.sin(sceneTime * 1.73) > 0.25;
+  tone("sine", 2200, 2750, 0.09, 0.018);
+  if (answer) tone("sine", 2350, 2800, 0.09, 0.016, 0.2);
 }
 
-// Play a distant wood chop.
+// Play two distant wood chops.
 function soundWood() {
-  tone("triangle", 180, 150, 0.24, 0.022);
+  tone("triangle", 180, 155, 0.2, 0.016);
+  tone("triangle", 180, 150, 0.2, 0.014, 0.3);
 }
 
 // Play a faint cow-like glissando.
 function soundCow() {
-  tone("sine", 220, 140, 0.6, 0.016);
+  tone("sine", 220, 140, 0.6, 0.011);
 }
 
 // Play two distant monkey-like chirps.
 function soundMonkey() {
-  tone("sine", 900, 610, 0.13, 0.015);
-  tone("sine", 920, 590, 0.14, 0.014, 0.19);
+  tone("sine", 900, 620, 0.12, 0.011);
+  tone("sine", 900, 590, 0.13, 0.01, 0.17);
 }
 
 // Play low distant traffic using an oscillator envelope.
@@ -280,31 +283,37 @@ function soundTraffic() {
   osc.type = "sine";
   osc.frequency.value = 60;
   amp.gain.setValueAtTime(0.0001, now);
-  amp.gain.linearRampToValueAtTime(0.012, now + 1.5);
-  amp.gain.setValueAtTime(0.012, now + 3.5);
-  amp.gain.linearRampToValueAtTime(0.0001, now + 5);
+  amp.gain.linearRampToValueAtTime(0.009, now + 2);
+  amp.gain.setValueAtTime(0.009, now + 4);
+  amp.gain.linearRampToValueAtTime(0.0001, now + 6);
   osc.connect(amp);
   amp.connect(audioCtx.destination);
   osc.start(now);
-  osc.stop(now + 5.05);
+  osc.stop(now + 6.05);
 }
 
-// Play a triangle-cluster water splash.
+// Play a rare low-volume water splash.
 function soundWater() {
-  tone("triangle", 460, 570, 0.2, 0.013);
-  tone("triangle", 540, 420, 0.16, 0.009, 0.035);
-  tone("triangle", 610, 500, 0.12, 0.007, 0.07);
+  tone("triangle", 470, 540, 0.2, 0.009);
+  tone("triangle", 530, 460, 0.16, 0.006, 0.03);
 }
 
-// Play a broom-like oscillator sweep.
+// Play a broom-like triangle sweep.
 function soundBroom() {
-  tone("triangle", 400, 200, 0.3, 0.012);
+  tone("triangle", 500, 250, 0.3, 0.009);
 }
 
-// Play a very distant temple bell.
+// Play a very distant temple bell with detune shimmer.
 function soundBell() {
-  tone("sine", 550, 548, 2, 0.011);
-  tone("sine", 554, 551, 1.7, 0.004);
+  tone("sine", 550, 548, 2, 0.008);
+  tone("sine", 554, 551, 1.8, 0.003);
+}
+
+// Play a faint synthetic rooftop chuckle.
+function soundLaughter() {
+  tone("sine", 700, 680, 0.1, 0.008);
+  tone("sine", 800, 770, 0.1, 0.007, 0.11);
+  tone("sine", 750, 720, 0.12, 0.006, 0.22);
 }
 
 // Play the cut ping and ring.
@@ -313,13 +322,40 @@ function soundCut() {
   tone("triangle", 1400, 1390, 0.4, 0.035, 0.04);
 }
 
-// Schedule rare ambient events using game-loop elapsed time only.
+// Return a deterministic-looking interval within a sound's required range.
+function ambientInterval(minimum, maximum, salt) {
+  const wave = (Math.sin(sceneTime * 0.371 + salt * 2.17) + 1) * 0.5;
+  return minimum + (maximum - minimum) * wave;
+}
+
+// Reset independent game-loop ambient clocks.
+function resetAmbientSchedule() {
+  ambientSchedule = {
+    birds: sceneTime + ambientInterval(8, 15, 1),
+    broom: sceneTime + ambientInterval(20, 30, 2),
+    traffic: sceneTime + ambientInterval(15, 25, 3),
+    cow: sceneTime + ambientInterval(60, 90, 4),
+    monkey: sceneTime + ambientInterval(90, 120, 5),
+    bell: sceneTime + ambientInterval(150, 180, 6),
+    laughter: sceneTime + ambientInterval(30, 45, 7),
+    wood: sceneTime + ambientInterval(25, 40, 8),
+    water: sceneTime + ambientInterval(90, 120, 9)
+  };
+}
+
+// Fire due ambient events from scene time only.
 function updateAmbient() {
-  if (elapsed < nextAmbientAt) return;
-  const sounds = [soundBirds, soundWood, soundCow, soundMonkey, soundTraffic, soundWater, soundBroom, soundBell];
-  sounds[ambientIndex % sounds.length]();
-  ambientIndex += 1;
-  nextAmbientAt = elapsed + 8 + Math.random() * 17;
+  const specs = {
+    birds:[8,15,soundBirds,1], broom:[20,30,soundBroom,2], traffic:[15,25,soundTraffic,3],
+    cow:[60,90,soundCow,4], monkey:[90,120,soundMonkey,5], bell:[150,180,soundBell,6],
+    laughter:[30,45,soundLaughter,7], wood:[25,40,soundWood,8], water:[90,120,soundWater,9]
+  };
+  Object.keys(specs).forEach(name => {
+    if (sceneTime < ambientSchedule[name]) return;
+    const spec = specs[name];
+    spec[2]();
+    ambientSchedule[name] = sceneTime + ambientInterval(spec[0], spec[1], spec[3] + sceneTime * 0.01);
+  });
 }
 
 // Speak a Hindi line with graceful silent fallback.
@@ -547,19 +583,21 @@ function lossDetail(reason) {
   return "Time ran out.";
 }
 
-// Draw the reusable India Frame scene with a future-ready timeOfDay tint parameter.
+// Draw the reusable India Frame scene with layered parallax and living motion.
 function drawIndiaFrame(time) {
   drawSky(time);
   drawSun();
-  drawFarCity();
-  const parallax = (player.x / Math.max(1, W()) - 0.5) * W() * 0.1;
-  drawMidRooftops(parallax);
-  drawForegroundRoof();
-  drawClothesline();
-  drawAunty(elapsed);
-  drawChaiwala(elapsed, parallax);
-  drawKid(elapsed, parallax);
-  drawBirds(elapsed);
+  const kiteOffset = player.x - W() * 0.31;
+  drawFarCity(kiteOffset * 0.06);
+  drawMidRooftops(kiteOffset * 0.12);
+  drawForegroundRoof(kiteOffset * 0.20);
+  drawClothesline(kiteOffset * 0.20);
+  drawLooseManjha(kiteOffset * 0.20);
+  drawAunty(sceneTime, kiteOffset * 0.20);
+  drawChaiwala(sceneTime, kiteOffset * 0.12);
+  drawKid(sceneTime, kiteOffset * 0.12);
+  drawBirds(sceneTime);
+  drawDustMotes();
 }
 
 // Draw a tintable sky.
@@ -573,68 +611,105 @@ function drawSky(time) {
   ctx.fillRect(0,0,W(),H());
 }
 
-// Draw golden-hour sun glow.
+// Draw golden-hour sun glow with a subtle eight-second pulse.
 function drawSun() {
   const x=W()*0.18, y=H()*0.55;
-  const g=ctx.createRadialGradient(x,y,4,x,y,95);
+  const pulse=1+Math.sin(sceneTime*Math.PI/4)*0.04;
+  const radius=95*pulse;
+  const g=ctx.createRadialGradient(x,y,4,x,y,radius);
   g.addColorStop(0,"#fff8c8cc"); g.addColorStop(1,"#ffd65a00");
-  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,95,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,radius,0,Math.PI*2); ctx.fill();
 }
 
-// Draw distant city silhouettes.
-function drawFarCity() {
+// Draw distant city silhouettes with six-percent kite parallax.
+function drawFarCity(offset) {
   ctx.fillStyle="#26375b55";
-  for(let x=-10;x<W()+30;x+=32){ const h=24+((x*7)%42+42)%42; ctx.fillRect(x,H()*0.61-h,28,h); }
+  for(let x=-45;x<W()+45;x+=32){ const h=24+((x*7)%42+42)%42; ctx.fillRect(x+offset,H()*0.61-h,28,h); }
 }
 
-// Draw three mid-depth rooftops, tanks, antennas and parapets.
-function drawMidRooftops(p) {
-  const roofs=[{x:-20+p*.3,y:.66,w:.34,h:.12},{x:.36*W()+p*.6,y:.61,w:.28,h:.17},{x:.7*W()+p,y:.68,w:.34,h:.1}];
-  roofs.forEach((r,i)=>{ const x=typeof r.x==="number"&&Math.abs(r.x)<2?r.x*W():r.x; const y=r.y*H(); const w=r.w*W(); ctx.fillStyle=i===1?"#8d604f":"#74564d"; ctx.fillRect(x,y,w,H()-y); ctx.fillStyle="#4a4a56"; ctx.fillRect(x+w*.58,y-32,38,32); ctx.fillStyle="#2d3246"; ctx.fillRect(x+w*.63,y-49,2,17); ctx.strokeStyle="#34364a"; ctx.lineWidth=2; ctx.beginPath();ctx.moveTo(x+w*.2,y);ctx.lineTo(x+w*.2,y-50);ctx.lineTo(x+w*.24,y-58);ctx.stroke(); });
+// Draw three mid-depth rooftops with twelve-percent kite parallax.
+function drawMidRooftops(offset) {
+  const roofs=[{x:-20,y:.66,w:.34},{x:.36*W(),y:.61,w:.28},{x:.7*W(),y:.68,w:.34}];
+  roofs.forEach((r,i)=>{ const x=r.x+offset; const y=r.y*H(); const w=r.w*W(); ctx.fillStyle=i===1?"#8d604f":"#74564d"; ctx.fillRect(x,y,w,H()-y); ctx.fillStyle="#4a4a56"; ctx.fillRect(x+w*.58,y-32,38,32); ctx.fillStyle="#2d3246"; ctx.fillRect(x+w*.63,y-49,2,17); ctx.strokeStyle="#34364a"; ctx.lineWidth=2; ctx.beginPath();ctx.moveTo(x+w*.2,y);ctx.lineTo(x+w*.2,y-50);ctx.lineTo(x+w*.24,y-58);ctx.stroke(); });
 }
 
-// Draw foreground terrace and long shadows.
-function drawForegroundRoof() {
+// Draw foreground terrace with twenty-percent kite parallax.
+function drawForegroundRoof(offset) {
   const y=H()*.82;
-  ctx.fillStyle="#a46b50";ctx.fillRect(0,y,W(),H()-y);
-  ctx.fillStyle="#70483f";ctx.fillRect(0,y-18,W(),18);
-  ctx.fillStyle="#503a3d33";ctx.beginPath();ctx.moveTo(W()*.1,y);ctx.lineTo(W()*.43,H());ctx.lineTo(W()*.31,H());ctx.closePath();ctx.fill();
+  ctx.fillStyle="#a46b50";ctx.fillRect(-40+offset,y,W()+80,H()-y);
+  ctx.fillStyle="#70483f";ctx.fillRect(-40+offset,y-18,W()+80,18);
+  ctx.fillStyle="#503a3d33";ctx.beginPath();ctx.moveTo(W()*.1+offset,y);ctx.lineTo(W()*.43+offset,H());ctx.lineTo(W()*.31+offset,H());ctx.closePath();ctx.fill();
 }
 
-// Draw clothesline and four swaying cloth pieces.
-function drawClothesline() {
+// Draw four independently swaying cloth pieces tied to wind strength.
+function drawClothesline(offset) {
   const y=H()*.73;
-  ctx.strokeStyle="#3f3840";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(W()*.07,y-55);ctx.quadraticCurveTo(W()*.34,y-38,W()*.57,y-52);ctx.stroke();
-  [0.14,0.24,0.35,0.47].forEach((f,i)=>{ const sway=Math.sin(elapsed*1.4+i)*5; ctx.fillStyle=[COLORS.gold,COLORS.jade,COLORS.white,COLORS.red][i]; ctx.beginPath();ctx.moveTo(W()*f,y-48);ctx.lineTo(W()*f+28,y-47);ctx.lineTo(W()*f+25+sway,y-7);ctx.lineTo(W()*f+3+sway,y-10);ctx.closePath();ctx.fill(); });
+  const windScale=1+getLevelConfig(currentLevel).wind/45;
+  const cloth=[{f:.14,p:.2,h:.71},{f:.24,p:1.7,h:.83},{f:.35,p:3.1,h:.64},{f:.47,p:4.8,h:.76}];
+  ctx.strokeStyle="#3f3840";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(W()*.07+offset,y-55);ctx.quadraticCurveTo(W()*.34+offset,y-38,W()*.57+offset,y-52);ctx.stroke();
+  cloth.forEach((c,i)=>{const angle=Math.sin(sceneTime*c.h+c.p)*(6*Math.PI/180)*windScale;const x=W()*c.f+offset;ctx.save();ctx.translate(x,y-48);ctx.rotate(angle);ctx.fillStyle=[COLORS.gold,COLORS.jade,COLORS.white,COLORS.red][i];ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(28,1);ctx.lineTo(25,41);ctx.lineTo(3,38);ctx.closePath();ctx.fill();ctx.restore();});
 }
 
-// Draw the six-second-cycle aunty silhouette and cloth action.
-function drawAunty(t) {
-  const x=W()*.12,y=H()*.82,phase=(t%6)/6*Math.PI*2;
-  ctx.strokeStyle="#322f42";ctx.fillStyle="#7d3f57";ctx.lineWidth=5;ctx.beginPath();ctx.arc(x,y-68,10,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.moveTo(x,y-58);ctx.lineTo(x+Math.sin(phase)*3,y-22);ctx.stroke();ctx.beginPath();ctx.moveTo(x,y-49);ctx.lineTo(x+22,y-74-Math.max(0,Math.sin(phase))*8);ctx.stroke();
+// Draw a loose rooftop manjha thread fluttering with the same wind.
+function drawLooseManjha(offset) {
+  const gust=wind.x/Math.max(8,getLevelConfig(currentLevel).wind);
+  const x=W()*.61+offset,y=H()*.815;
+  ctx.strokeStyle="#fffdf477";ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x,y);ctx.quadraticCurveTo(x+18+gust*10,y-18,x+38+gust*16,y-5);ctx.stroke();
 }
 
-// Draw distant chaiwala, stall, kettle and animated steam.
-function drawChaiwala(t,p) {
-  const x=W()*.49+p*.6,y=H()*.61;
-  ctx.fillStyle="#493b42";ctx.fillRect(x-26,y-20,58,20);ctx.beginPath();ctx.arc(x,y-43,6,0,Math.PI*2);ctx.fill();ctx.fillRect(x-5,y-37,10,18);
+// Draw aunty's seven-second reach, clip, smooth, straighten and weight-shift cycle.
+function drawAunty(t,offset) {
+  const x=W()*.12+offset,y=H()*.82,cycle=(t%7)/7;
+  const breathe=Math.sin(t*2.1)*1.2;
+  let reach=0,smooth=0,shift=0;
+  if(cycle<.2) reach=cycle/.2;
+  else if(cycle<.35) reach=1;
+  else if(cycle<.55){reach=1-(cycle-.35)/.2;smooth=(cycle-.35)/.2;}
+  else if(cycle<.72) smooth=1-(cycle-.55)/.17;
+  else shift=Math.sin((cycle-.72)/.28*Math.PI)*3;
+  ctx.strokeStyle="#322f42";ctx.fillStyle="#7d3f57";ctx.lineWidth=5;ctx.beginPath();ctx.arc(x+shift,y-68+breathe,10,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.moveTo(x+shift,y-58+breathe);ctx.lineTo(x+shift,y-22);ctx.stroke();ctx.beginPath();ctx.moveTo(x+shift,y-49+breathe);ctx.lineTo(x+12+reach*14+smooth*4,y-57-reach*25+smooth*8);ctx.stroke();
+}
+
+// Draw chaiwala's nine-second stir-look-stir loop and soft circle steam.
+function drawChaiwala(t,offset) {
+  const x=W()*.49+offset,y=H()*.61,cycle=(t%9)/9;
+  const looking=cycle>.42&&cycle<.62;
+  const stir=(cycle<.32||(cycle>.68&&cycle<.94))?Math.sin(t*8)*4:0;
+  ctx.fillStyle="#493b42";ctx.fillRect(x-26,y-20,58,20);ctx.beginPath();ctx.arc(x+(looking?3:0),y-43-(looking?2:0),6,0,Math.PI*2);ctx.fill();ctx.fillRect(x-5,y-37,10,18);
+  ctx.strokeStyle="#493b42";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x,y-28);ctx.lineTo(x+17+stir,y-24);ctx.stroke();
   ctx.fillStyle="#d7c5a4";ctx.beginPath();ctx.ellipse(x+20,y-26,8,5,0,0,Math.PI*2);ctx.fill();
-  ctx.strokeStyle="#fff8";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x+20,y-32);ctx.bezierCurveTo(x+13+Math.sin(t*2)*4,y-45,x+28,y-53,x+20,y-64);ctx.stroke();
+  for(let i=0;i<4;i+=1){const rise=(sceneTime*.18+i*.23)%1;const sx=x+20+Math.sin(sceneTime*1.3+i)*4;const sy=y-34-rise*38;ctx.globalAlpha=(1-rise)*.16;ctx.fillStyle=COLORS.white;ctx.beginPath();ctx.arc(sx,sy,3.5+Math.sin(sceneTime+i)*.8,0,Math.PI*2);ctx.fill();}ctx.globalAlpha=1;
 }
 
-// Draw kid whose arm mirrors simplified player kite motion.
-function drawKid(t,p) {
-  const x=W()*.79+p,y=H()*.68;
-  const arm=clamp((player.y/H()-.25)*35,-8,18);
-  ctx.fillStyle="#303247";ctx.beginPath();ctx.arc(x,y-35,6,0,Math.PI*2);ctx.fill();ctx.fillRect(x-4,y-29,8,21);ctx.strokeStyle="#303247";ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(x,y-24);ctx.lineTo(x-15,y-35+arm);ctx.stroke();
-  drawKite(x-24,y-55+arm,8,COLORS.jade,0);
+// Draw kid with tiny irregular kite tugs and occasional sky-following head motion.
+function drawKid(t,offset) {
+  const x=W()*.79+offset,y=H()*.68;
+  const tug=Math.sin(t*5.3)*2.2+Math.sin(t*8.7+1.4)*1.4;
+  const look=Math.sin(t*.47)>0.72?-3:0;
+  const arm=clamp((player.y/H()-.25)*22+tug,-7,15);
+  ctx.fillStyle="#303247";ctx.beginPath();ctx.arc(x+look,y-35+look*.3,6,0,Math.PI*2);ctx.fill();ctx.fillRect(x-4,y-29,8,21);ctx.strokeStyle="#303247";ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(x,y-24);ctx.lineTo(x-15,y-35+arm);ctx.stroke();
+  drawKite(x-24,y-55+arm,8,COLORS.jade,Math.sin(t*2.2)*.08);
 }
 
-// Draw two or three slow V-shaped birds.
+// Draw birds with a two-frame four-hertz flap and vertical dip.
 function drawBirds(t) {
-  if (!birds.length) birds=[{o:0,y:.2,s:10},{o:170,y:.27,s:8},{o:330,y:.17,s:11}];
+  if(!birds.length) birds=[{o:0,y:.2,s:10},{o:170,y:.27,s:8},{o:330,y:.17,s:11}];
   ctx.strokeStyle="#263047aa";ctx.lineWidth=2;
-  birds.forEach(b=>{const x=((t*b.s+b.o)%(W()+100))-50,y=H()*b.y;ctx.beginPath();ctx.moveTo(x-7,y);ctx.lineTo(x,y-4);ctx.lineTo(x+7,y);ctx.stroke();});
+  const up=Math.floor(t*8)%2===0;
+  birds.forEach((b,i)=>{const x=((t*b.s+b.o)%(W()+100))-50;const dip=up?0:2.5;const y=H()*b.y+dip;const wing=up?-6:4;ctx.beginPath();ctx.moveTo(x-8,y+wing);ctx.lineTo(x,y);ctx.lineTo(x+8,y+wing);ctx.stroke();});
+}
+
+// Spawn and update very faint dust motes from scene time.
+function updateDustMotes(dt) {
+  if(sceneTime>=nextDustAt&&dustMotes.length<2){dustMotes.push({x:-4,y:H()*(.25+.45*((Math.sin(sceneTime*1.7)+1)/2)),vx:5+3*((Math.sin(sceneTime*.9)+1)/2),life:7});nextDustAt=sceneTime+3.5+2.5*((Math.sin(sceneTime*.61)+1)/2);}
+  dustMotes.forEach(m=>{m.x+=m.vx*dt;m.y+=Math.sin(sceneTime*.8+m.x*.02)*.15;m.life-=dt;});
+  dustMotes=dustMotes.filter(m=>m.life>0&&m.x<W()+8);
+}
+
+// Draw low-alpha drifting dust motes.
+function drawDustMotes() {
+  ctx.fillStyle="#fff7c933";
+  dustMotes.forEach(m=>{ctx.beginPath();ctx.arc(m.x,m.y,1.4,0,Math.PI*2);ctx.fill();});
 }
 
 // Draw one diamond kite and tail.
@@ -685,7 +760,10 @@ function clamp(value,min,max) {
 
 // Advance all gameplay systems.
 function update(dt) {
-  if(mode!=="playing"||paused) return;
+  if(paused) return;
+  sceneTime += dt;
+  updateDustMotes(dt);
+  if(mode!=="playing") return;
   if(celebration){updateCelebration(dt);return;}
   elapsed+=dt;
   if(elapsed>=45){triggerLoss("timer");return;}
