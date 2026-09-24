@@ -15,7 +15,7 @@ const resultStars = document.getElementById("resultStars");
 const levelBadge = document.getElementById("levelBadge");
 const muteButton = document.getElementById("muteButton");
 
-const COLORS = { white:"#fffdf4", gold:"#ffd65a", indigo:"#5c6cff", red:"#ff5364", jade:"#42d887", ink:"#172044" };
+const COLORS = { white:"#fffdf4", gold:"#ffd65a", indigo:"#5c6cff", red:"#ff5364", jade:"#42d887", ink:"#172044", skin:"#c68b5c", skinShadow:"#a06d45", auntySkin:"#b87d51", hair:"#1c1410", kurta:"#f4f0e8", beige:"#e8dcc4", saffron:"#e07a1f", saffronDark:"#a8451a", sareeGold:"#d4a24a", bindi:"#c8102e", wood:"#8a5a2b", leaf:"#2d8a3e", marigold:"#ff8c1a", marigoldLight:"#ffb340" };
 const SAVE_KEY = "patang";
 let save = loadSave();
 let currentLevel = 1;
@@ -591,11 +591,14 @@ function drawIndiaFrame(time) {
   drawFarCity(kiteOffset * 0.06);
   drawMidRooftops(kiteOffset * 0.12);
   drawForegroundRoof(kiteOffset * 0.20);
+  drawSacredMark(kiteOffset * 0.20);
+  drawPaanStall(kiteOffset * 0.12);
+  drawPaanWala("idle", sceneTime, kiteOffset * 0.12);
   drawClothesline(kiteOffset * 0.20);
   drawLooseManjha(kiteOffset * 0.20);
-  drawAunty(sceneTime, kiteOffset * 0.20);
-  drawChaiwala(sceneTime, kiteOffset * 0.12);
-  drawKid(sceneTime, kiteOffset * 0.12);
+  drawAunty("laundry", sceneTime, kiteOffset * 0.20);
+  drawChaiwala("stir", sceneTime, kiteOffset * 0.12);
+  drawBoy(getBoyPose(), sceneTime);
   drawBirds(sceneTime);
   drawDustMotes();
 }
@@ -641,54 +644,104 @@ function drawForegroundRoof(offset) {
   ctx.fillStyle="#503a3d33";ctx.beginPath();ctx.moveTo(W()*.1+offset,y);ctx.lineTo(W()*.43+offset,H());ctx.lineTo(W()*.31+offset,H());ctx.closePath();ctx.fill();
 }
 
-// Draw four independently swaying cloth pieces tied to wind strength.
+// Draw four independently swaying printed cloth pieces tied to wind strength.
 function drawClothesline(offset) {
   const y=H()*.73;
   const windScale=1+getLevelConfig(currentLevel).wind/45;
   const cloth=[{f:.14,p:.2,h:.71},{f:.24,p:1.7,h:.83},{f:.35,p:3.1,h:.64},{f:.47,p:4.8,h:.76}];
-  ctx.strokeStyle="#3f3840";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(W()*.07+offset,y-55);ctx.quadraticCurveTo(W()*.34+offset,y-38,W()*.57+offset,y-52);ctx.stroke();
-  cloth.forEach((c,i)=>{const angle=Math.sin(sceneTime*c.h+c.p)*(6*Math.PI/180)*windScale;const x=W()*c.f+offset;ctx.save();ctx.translate(x,y-48);ctx.rotate(angle);ctx.fillStyle=[COLORS.gold,COLORS.jade,COLORS.white,COLORS.red][i];ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(28,1);ctx.lineTo(25,41);ctx.lineTo(3,38);ctx.closePath();ctx.fill();ctx.restore();});
+  ctx.strokeStyle=COLORS.hair;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(W()*.07+offset,y-55);ctx.quadraticCurveTo(W()*.34+offset,y-38,W()*.57+offset,y-52);ctx.stroke();
+  cloth.forEach((c,i)=>{const angle=Math.sin(sceneTime*c.h+c.p)*(6*Math.PI/180)*windScale;const x=W()*c.f+offset;ctx.save();ctx.translate(x,y-48);ctx.rotate(angle);ctx.fillStyle=[COLORS.gold,COLORS.jade,COLORS.kurta,COLORS.red][i];ctx.beginPath();ctx.moveTo(0,0);ctx.quadraticCurveTo(14,-2,28,1);ctx.lineTo(25,41);ctx.quadraticCurveTo(13,38,3,38);ctx.closePath();ctx.fill();ctx.lineWidth=1.2;ctx.strokeStyle=i===2?COLORS.beige:COLORS.white;if(i===0){for(let d=7;d<25;d+=8){ctx.beginPath();ctx.arc(d,13+(d%3)*5,1.5,0,Math.PI*2);ctx.fillStyle=COLORS.red;ctx.fill();}}if(i===1){for(let q=8;q<35;q+=8){ctx.beginPath();ctx.moveTo(3,q);ctx.lineTo(25,q);ctx.stroke();}}if(i===3){ctx.fillStyle=COLORS.gold;for(let q=0;q<2;q++){ctx.beginPath();ctx.arc(10+q*10,18+q*8,2.2,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(13+q*10,18+q*8,2.2,0,Math.PI*2);ctx.fill();}}ctx.restore();});
 }
 
 // Draw a loose rooftop manjha thread fluttering with the same wind.
 function drawLooseManjha(offset) {
   const gust=wind.x/Math.max(8,getLevelConfig(currentLevel).wind);
   const x=W()*.61+offset,y=H()*.815;
-  ctx.strokeStyle="#fffdf477";ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x,y);ctx.quadraticCurveTo(x+18+gust*10,y-18,x+38+gust*16,y-5);ctx.stroke();
+  ctx.strokeStyle=COLORS.white;ctx.globalAlpha=.45;ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x,y);ctx.quadraticCurveTo(x+18+gust*10,y-18,x+38+gust*16,y-5);ctx.stroke();ctx.globalAlpha=1;
 }
 
-// Draw aunty's seven-second reach, clip, smooth, straighten and weight-shift cycle.
-function drawAunty(t,offset) {
-  const x=W()*.12+offset,y=H()*.82,cycle=(t%7)/7;
-  const breathe=Math.sin(t*2.1)*1.2;
-  let reach=0,smooth=0,shift=0;
-  if(cycle<.2) reach=cycle/.2;
-  else if(cycle<.35) reach=1;
-  else if(cycle<.55){reach=1-(cycle-.35)/.2;smooth=(cycle-.35)/.2;}
-  else if(cycle<.72) smooth=1-(cycle-.55)/.17;
-  else shift=Math.sin((cycle-.72)/.28*Math.PI)*3;
-  ctx.strokeStyle="#322f42";ctx.fillStyle="#7d3f57";ctx.lineWidth=5;ctx.beginPath();ctx.arc(x+shift,y-68+breathe,10,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.moveTo(x+shift,y-58+breathe);ctx.lineTo(x+shift,y-22);ctx.stroke();ctx.beginPath();ctx.moveTo(x+shift,y-49+breathe);ctx.lineTo(x+12+reach*14+smooth*4,y-57-reach*25+smooth*8);ctx.stroke();
+// Choose the protagonist pose from the current game state.
+function getBoyPose() {
+  if(celebration) return celebration.loss?"loss":"celebrate";
+  if(actionPhase==="khench") return "khench";
+  if(actionPhase==="dheel") return "dheel";
+  return "kite";
 }
 
-// Draw chaiwala's nine-second stir-look-stir loop and soft circle steam.
-function drawChaiwala(t,offset) {
-  const x=W()*.49+offset,y=H()*.61,cycle=(t%9)/9;
-  const looking=cycle>.42&&cycle<.62;
-  const stir=(cycle<.32||(cycle>.68&&cycle<.94))?Math.sin(t*8)*4:0;
-  ctx.fillStyle="#493b42";ctx.fillRect(x-26,y-20,58,20);ctx.beginPath();ctx.arc(x+(looking?3:0),y-43-(looking?2:0),6,0,Math.PI*2);ctx.fill();ctx.fillRect(x-5,y-37,10,18);
-  ctx.strokeStyle="#493b42";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x,y-28);ctx.lineTo(x+17+stir,y-24);ctx.stroke();
-  ctx.fillStyle="#d7c5a4";ctx.beginPath();ctx.ellipse(x+20,y-26,8,5,0,0,Math.PI*2);ctx.fill();
-  for(let i=0;i<4;i+=1){const rise=(sceneTime*.18+i*.23)%1;const sx=x+20+Math.sin(sceneTime*1.3+i)*4;const sy=y-34-rise*38;ctx.globalAlpha=(1-rise)*.16;ctx.fillStyle=COLORS.white;ctx.beginPath();ctx.arc(sx,sy,3.5+Math.sin(sceneTime+i)*.8,0,Math.PI*2);ctx.fill();}ctx.globalAlpha=1;
+// Draw the shared India Frame boy with a face, kurta, hand and charkhi.
+function drawBoy(pose, sceneTime) {
+  if(mode!=="playing"&&mode!=="result") return;
+  const x=W()*.5,y=H()*.96;
+  const breathe=Math.sin(sceneTime*1.7)*1.5;
+  const headTurn=Math.sin(sceneTime*.42)*1.4;
+  const lean=pose==="khench"?-7:pose==="dheel"?3:pose==="loss"?6:0;
+  const armLift=pose==="celebrate"?-50:pose==="khench"?-12:pose==="dheel"?8:0;
+  ctx.save();ctx.translate(x+lean,y+breathe);
+  ctx.fillStyle=COLORS.kurta;ctx.strokeStyle=COLORS.beige;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(-50,0);ctx.quadraticCurveTo(-48,-68,-30,-83);ctx.quadraticCurveTo(0,-96,30,-83);ctx.quadraticCurveTo(48,-68,50,0);ctx.closePath();ctx.fill();ctx.stroke();
+  ctx.strokeStyle=COLORS.skinShadow;ctx.beginPath();ctx.moveTo(-9,-80);ctx.lineTo(0,-70);ctx.lineTo(9,-80);ctx.stroke();ctx.beginPath();ctx.moveTo(-4,-55);ctx.quadraticCurveTo(1,-49,5,-44);ctx.stroke();
+  ctx.fillStyle=COLORS.skinShadow;ctx.beginPath();ctx.ellipse(headTurn,-91,24,29,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=COLORS.skin;ctx.beginPath();ctx.ellipse(headTurn,-94,23,28,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.arc(headTurn,-105,23,Math.PI,Math.PI*2);ctx.quadraticCurveTo(-4,-124,11,-116);ctx.quadraticCurveTo(18,-112,22,-102);ctx.lineTo(20,-112);ctx.quadraticCurveTo(2,-127,-20,-111);ctx.closePath();ctx.fill();ctx.fillRect(-23+headTurn,-108,4,14);
+  drawBoyFace(headTurn,-95);
+  const handX=37,handY=-61+armLift;ctx.strokeStyle=COLORS.skin;ctx.lineWidth=11;ctx.lineCap="round";ctx.beginPath();ctx.moveTo(25,-72);ctx.quadraticCurveTo(34,-66,handX,handY);ctx.stroke();ctx.fillStyle=COLORS.skin;ctx.beginPath();ctx.ellipse(handX,handY,8,6,-.2,0,Math.PI*2);ctx.fill();ctx.strokeStyle=COLORS.skinShadow;ctx.lineWidth=1;for(let i=-2;i<=2;i+=2){ctx.beginPath();ctx.moveTo(handX+2,handY+i);ctx.lineTo(handX+7,handY+i+1);ctx.stroke();}
+  drawCharkhi(handX+10,handY+4);
+  ctx.restore();
 }
 
-// Draw kid with tiny irregular kite tugs and occasional sky-following head motion.
-function drawKid(t,offset) {
-  const x=W()*.79+offset,y=H()*.68;
-  const tug=Math.sin(t*5.3)*2.2+Math.sin(t*8.7+1.4)*1.4;
-  const look=Math.sin(t*.47)>0.72?-3:0;
-  const arm=clamp((player.y/H()-.25)*22+tug,-7,15);
-  ctx.fillStyle="#303247";ctx.beginPath();ctx.arc(x+look,y-35+look*.3,6,0,Math.PI*2);ctx.fill();ctx.fillRect(x-4,y-29,8,21);ctx.strokeStyle="#303247";ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(x,y-24);ctx.lineTo(x-15,y-35+arm);ctx.stroke();
-  drawKite(x-24,y-55+arm,8,COLORS.jade,Math.sin(t*2.2)*.08);
+// Draw the protagonist's almond eyes and small facial features.
+function drawBoyFace(x,y) {
+  ctx.fillStyle=COLORS.kurta;[-8,8].forEach(dx=>{ctx.beginPath();ctx.ellipse(x+dx,y-3,5,2.7,0,0,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.sareeGold;ctx.beginPath();ctx.ellipse(x+dx,y-3,2.3,2.1,0,0,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.arc(x+dx,y-3,1.2,0,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.kurta;});ctx.strokeStyle=COLORS.hair;ctx.lineWidth=1.3;ctx.beginPath();ctx.moveTo(x-13,y-10);ctx.quadraticCurveTo(x-8,y-13,x-3,y-10);ctx.moveTo(x+3,y-10);ctx.quadraticCurveTo(x+8,y-13,x+13,y-10);ctx.stroke();ctx.strokeStyle=COLORS.skinShadow;ctx.beginPath();ctx.arc(x,y+1,4,.2,1.3);ctx.moveTo(x-3,y+2);ctx.quadraticCurveTo(x,y+4,x+3,y+2);ctx.stroke();ctx.strokeStyle=COLORS.hair;ctx.beginPath();ctx.arc(x,y+8,7,.25,Math.PI-.25);ctx.stroke();
+}
+
+// Draw the wooden charkhi and visible manjha.
+function drawCharkhi(x,y) {
+  ctx.strokeStyle=COLORS.wood;ctx.fillStyle=COLORS.wood;ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y-6,7,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(x,y+8,7,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.moveTo(x,y-6);ctx.lineTo(x,y+8);ctx.stroke();ctx.strokeStyle=COLORS.white;ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x+5,y-5);ctx.lineTo(player.x,player.y);ctx.stroke();
+}
+
+// Draw aunty as a full saffron-saree figure with face, bindi, bun and pallu.
+function drawAunty(pose, sceneTime, offset) {
+  const x=W()*.82+offset,y=H()*.82,cycle=(sceneTime%7)/7,breathe=Math.sin(sceneTime*2.1);
+  const reach=cycle<.35?Math.min(1,cycle/.18):cycle<.58?1-(cycle-.35)/.23:0;
+  ctx.save();ctx.translate(x,y);
+  ctx.fillStyle=COLORS.saffron;ctx.beginPath();ctx.moveTo(-18,0);ctx.quadraticCurveTo(-23,-48,-14,-83);ctx.quadraticCurveTo(4,-96,19,-77);ctx.quadraticCurveTo(25,-38,19,0);ctx.closePath();ctx.fill();
+  ctx.fillStyle=COLORS.saffronDark;ctx.beginPath();ctx.ellipse(0,-78,18,12,-.15,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=COLORS.auntySkin;ctx.beginPath();ctx.ellipse(2,-103+breathe,12,15,-.12,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.arc(-2,-111,11,Math.PI,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(-11,-109,6,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.ellipse(6,-105,2.8,1.5,0,0,Math.PI*2);ctx.fill();ctx.strokeStyle=COLORS.skinShadow;ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(12,-102);ctx.quadraticCurveTo(16,-99,11,-97);ctx.stroke();ctx.fillStyle=COLORS.bindi;ctx.beginPath();ctx.arc(4,-112,1.5,0,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.sareeGold;ctx.beginPath();ctx.arc(13,-101,2,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=COLORS.saffron;ctx.strokeStyle=COLORS.sareeGold;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(-9,-88);ctx.quadraticCurveTo(-23,-70,-20,-24);ctx.quadraticCurveTo(-6,-38,3,-83);ctx.closePath();ctx.fill();ctx.stroke();
+  ctx.strokeStyle=COLORS.auntySkin;ctx.lineWidth=8;ctx.lineCap="round";ctx.beginPath();ctx.moveTo(10,-78);ctx.lineTo(22,-75-reach*24);ctx.lineTo(31,-69-reach*29);ctx.stroke();ctx.beginPath();ctx.moveTo(-9,-76);ctx.lineTo(-16,-50);ctx.stroke();ctx.restore();
+}
+
+// Draw chaiwala as a full figure with face, moustache, kurta, pyjama and gamchha.
+function drawChaiwala(pose, sceneTime, offset) {
+  const x=W()*.49+offset,y=H()*.61,cycle=(sceneTime%9)/9,looking=cycle>.42&&cycle<.62,stir=(cycle<.32||(cycle>.68&&cycle<.94))?Math.sin(sceneTime*8)*4:0;
+  drawChaiStall(x,y);
+  ctx.fillStyle=COLORS.beige;ctx.fillRect(x-8,y-14,7,25);ctx.fillRect(x+3,y-14,7,25);
+  ctx.fillStyle=COLORS.kurta;ctx.beginPath();ctx.moveTo(x-14,y-50);ctx.quadraticCurveTo(x,y-57,x+15,y-49);ctx.lineTo(x+12,y-13);ctx.lineTo(x-12,y-13);ctx.closePath();ctx.fill();
+  ctx.fillStyle=COLORS.skin;ctx.beginPath();ctx.ellipse(x+(looking?2:0),y-66,10,12,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.arc(x,y-72,10,Math.PI,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.moveTo(x-7,y-62);ctx.quadraticCurveTo(x,y-57,x+7,y-62);ctx.quadraticCurveTo(x,y-65,x-7,y-62);ctx.fill();ctx.fillStyle=COLORS.hair;ctx.beginPath();ctx.ellipse(x-4,y-67,1.3,1,0,0,Math.PI*2);ctx.ellipse(x+4,y-67,1.3,1,0,0,Math.PI*2);ctx.fill();ctx.strokeStyle=COLORS.skinShadow;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,y-66);ctx.lineTo(x+2,y-63);ctx.stroke();ctx.strokeStyle=COLORS.hair;ctx.beginPath();ctx.arc(x,y-58,3,Math.PI,0);ctx.stroke();
+  ctx.strokeStyle=COLORS.skin;ctx.lineWidth=6;ctx.beginPath();ctx.moveTo(x+9,y-43);ctx.lineTo(x+22+stir,y-27);ctx.moveTo(x-10,y-43);ctx.lineTo(x-21,y-25);ctx.stroke();
+  ctx.strokeStyle=COLORS.saffron;ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(x-8,y-49);ctx.lineTo(x+4,y-17);ctx.stroke();ctx.strokeStyle=COLORS.kurta;ctx.lineWidth=1;for(let q=-4;q<6;q+=4){ctx.beginPath();ctx.moveTo(x-5+q,y-46);ctx.lineTo(x+6+q,y-21);ctx.stroke();}
+}
+
+// Draw chai stall, kettle, mithai tray and marigold garland.
+function drawChaiStall(x,y) {
+  ctx.fillStyle=COLORS.wood;ctx.fillRect(x-34,y-22,72,9);ctx.fillRect(x-31,y-13,5,30);ctx.fillRect(x+29,y-13,5,30);ctx.fillStyle=COLORS.white;ctx.beginPath();ctx.ellipse(x+23,y-27,8,5,0,0,Math.PI*2);ctx.fill();ctx.fillStyle=COLORS.white;ctx.fillRect(x-31,y-31,27,4);[COLORS.gold,COLORS.saffron,COLORS.kurta,COLORS.gold].forEach((c,i)=>{ctx.fillStyle=c;ctx.beginPath();ctx.arc(x-26+i*7,y-34,3,0,Math.PI*2);ctx.fill();});ctx.strokeStyle=COLORS.sareeGold;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x-34,y-54);ctx.quadraticCurveTo(x,y-42,x+34,y-54);ctx.stroke();for(let i=0;i<9;i++){const gx=x-30+i*7.5,gy=y-51+Math.sin(i/8*Math.PI)*7;ctx.fillStyle=i%2?COLORS.marigold:COLORS.marigoldLight;ctx.beginPath();ctx.arc(gx,gy,2.5,0,Math.PI*2);ctx.fill();}for(let i=0;i<4;i++){const rise=(sceneTime*.18+i*.23)%1,sx=x+23+Math.sin(sceneTime*1.3+i)*4,sy=y-34-rise*35;ctx.globalAlpha=(1-rise)*.16;ctx.fillStyle=COLORS.white;ctx.beginPath();ctx.arc(sx,sy,3.5,0,Math.PI*2);ctx.fill();}ctx.globalAlpha=1;
+}
+
+// Draw the paan stall with red cloth and green leaves.
+function drawPaanStall(offset) {
+  const x=W()*.13+offset,y=H()*.68;ctx.fillStyle=COLORS.wood;ctx.fillRect(x-27,y-17,54,25);ctx.fillStyle=COLORS.red;ctx.fillRect(x-29,y-20,58,5);for(let i=0;i<3;i++){ctx.fillStyle=COLORS.leaf;ctx.beginPath();ctx.ellipse(x-13+i*13,y-25,7,3.5,-.35,0,Math.PI*2);ctx.fill();}
+}
+
+// Draw the distant paan-wala customer silhouette; the only intentionally silhouetted human.
+function drawPaanWala(pose, sceneTime, offset) {
+  const x=W()*.2+offset,y=H()*.68;ctx.fillStyle=COLORS.ink;ctx.beginPath();ctx.arc(x,y-38,6,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.moveTo(x-7,y-31);ctx.lineTo(x+7,y-31);ctx.lineTo(x+10,y);ctx.lineTo(x-10,y);ctx.closePath();ctx.fill();
+}
+
+// Draw a small respectful diya mark on the parapet.
+function drawSacredMark(offset) {
+  const x=W()*.67+offset,y=H()*.805;ctx.strokeStyle=COLORS.saffronDark;ctx.fillStyle=COLORS.saffronDark;ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(x,y,8,.15,Math.PI-.15);ctx.stroke();ctx.beginPath();ctx.moveTo(x,y-7);ctx.quadraticCurveTo(x-4,y-13,x,y-17);ctx.quadraticCurveTo(x+4,y-13,x,y-7);ctx.fill();
 }
 
 // Draw birds with a two-frame four-hertz flap and vertical dip.
