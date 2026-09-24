@@ -1,863 +1,1999 @@
-// PATANG_VERSION: 5.0.0
-// LAST_MAJOR_CHANGE: Full clean rebuild — conservative cut detection, dt clamp, explicit resets, no roundRect, HTML audio only
-"use strict";
 
-const canvas = document.getElementById("gameCanvas") || document.querySelector("canvas");
-const ctx = canvas.getContext("2d");
+// ============================================================
+// PATANG v6.0 — COMPLETE app.js
+// Indian Kite Fighting Game
+// ============================================================
 
-const scene = new Image();
-scene.src = "public/assets/scene.png";
+// 1. MODULE-LEVEL VARIABLES
+
+let canvas = null;
+let ctx = null;
+let W = 0;
+let H = 0;
+
+let sceneImage = null;
 let sceneReady = false;
-scene.onload = function () { sceneReady = true; recomputeLayout(); };
-scene.onerror = function () { sceneReady = false; };
 
-let W = 0, H = 0, lastCssW = 0, lastCssH = 0;
-let coverX = 0, coverY = 0, coverW = 0, coverH = 0;
-let boyHandX = 0, boyHandY = 0;
-let dheelZone = null, khenchZone = null, pauseZone = null;
-
+let gameState = "home";
 let level = 1;
-let gameState = "playing";
-let paused = false;
-let stateTimer = 0;
-let cutVictim = "";
-let failReason = "";
 let levelTimeLeft = 60;
-let spawnGrace = 2;
-let aiHuntingTimer = 8;
-let aiRetreatTimer = 0;
-let aiAttackTimer = 0;
-let manja = 0.3;
-let lastPluckTime = -999;
-let elapsed = 0;
-let lastTimestamp = 0;
+
 let frameCount = 0;
-let currentDt = 0;
+let lastTime = performance.now();
+let lastDt = 0;
+let timeAccumulator = 0;
+let sineAccumulator = 0;
 
-const player = { x: 0, y: 0, vx: 0, vy: 0 };
-const ai = { x: 0, y: 0, vx: 0, vy: 0 };
+const player = {
+  x: 0,
+  y: 0,
+  vx: 0,
+  vy: 0,
+  size: 0
+};
 
-let audioWater = null, audioSparrow = null, audioCrow = null, audioPluck = null;
-let voiceDheel = null, voiceKhench = null, voiceKatGai = null, voiceManjaGaya = null;
-let audioReady = false;
-let sparrowCountdown = 5;
-let crowCountdown = 15;
+const ai = {
+  x: 0,
+  y: 0,
+  vx: 0,
+  vy: 0,
+  size: 0,
+  huntTimer: 8,
+  retreatTimer: 0
+};
 
-const prompts = [];
-let confetti = [];
-let stars = [];
+let manja = 0.3;
+let spawnGrace = 2;
+let stateTimer = 0;
 
-// Build a rounded rectangle path without ctx.roundRect.
-function roundedPath(x, y, w, h, r) {
-  const q = Math.min(r, w * 0.5, h * 0.5);
-  ctx.beginPath();
-  ctx.moveTo(x + q, y);
-  ctx.lineTo(x + w - q, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + q);
-  ctx.lineTo(x + w, y + h - q);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - q, y + h);
-  ctx.lineTo(x + q, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - q);
-  ctx.lineTo(x, y + q);
-  ctx.quadraticCurveTo(x, y, x + q, y);
-  ctx.closePath();
+let aiWasCut = false;
+let playerCut = false;
+let paused = false;
+
+let lastPluckTime = -100;
+let scheduledClearPluckAt = -1;
+let failReason = "LEVEL FAIL";
+
+let promptQueue = [];
+
+let aiSparrowTimer = 4;
+let aiCrowTimer = 12;
+
+let audioWater = null;
+let audioSparrow = null;
+let audioCrow = null;
+let audioPluck = null;
+let audioDheel = null;
+let audioKhench = null;
+let audioKatGai = null;
+let audioManjaGaya = null;
+
+let audioInitialized = false;
+
+let dheelZone = null;
+let khenchZone = null;
+let pauseZone = null;
+let homePlayZone = null;
+
+let boyHandX = 0;
+let boyHandY = 0;
+
+let coverX = 0;
+let coverY = 0;
+let coverW = 0;
+let coverH = 0;
+
+let initialized = false;
+
+// ============================================================
+// 2. UTILITY FUNCTIONS
+// ============================================================
+
+function roundedRectPath(c, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.lineTo(x + w - r, y);
+  c.quadraticCurveTo(x + w, y, x + w, y + r);
+  c.lineTo(x + w, y + h - r);
+  c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  c.lineTo(x + r, y + h);
+  c.quadraticCurveTo(x, y + h, x, y + h - r);
+  c.lineTo(x, y + r);
+  c.quadraticCurveTo(x, y, x + r, y);
+  c.closePath();
 }
 
-// Return the exact duration for a level.
-function getLevelDuration(n) {
-  return Math.max(30, 62 - n * 2);
+function inZone(x, y, zone) {
+  if (!zone) return false;
+
+  return (
+    x >= zone.x &&
+    x <= zone.x + zone.w &&
+    y >= zone.y &&
+    y <= zone.y + zone.h
+  );
 }
 
-// Keep a scalar inside a range.
-function clamp(v, lo, hi) {
-  return Math.max(lo, Math.min(hi, v));
+function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+  const epsilon = 0.000001;
+
+  const o1 =
+    (bx - ax) * (cy - ay) -
+    (by - ay) * (cx - ax);
+
+  const o2 =
+    (bx - ax) * (dy - ay) -
+    (by - ay) * (dx - ax);
+
+  const o3 =
+    (dx - cx) * (ay - cy) -
+    (dy - cy) * (ax - cx);
+
+  const o4 =
+    (dx - cx) * (by - cy) -
+    (dy - cy) * (bx - cx);
+
+  if (
+    ((o1 > epsilon && o2 < -epsilon) ||
+      (o1 < -epsilon && o2 > epsilon)) &&
+    ((o3 > epsilon && o4 < -epsilon) ||
+      (o3 < -epsilon && o4 > epsilon))
+  ) {
+    return true;
+  }
+
+  function onSegment(px, py, qx, qy, rx, ry) {
+    return (
+      qx >= Math.min(px, rx) - epsilon &&
+      qx <= Math.max(px, rx) + epsilon &&
+      qy >= Math.min(py, ry) - epsilon &&
+      qy <= Math.max(py, ry) + epsilon
+    );
+  }
+
+  if (
+    Math.abs(o1) <= epsilon &&
+    onSegment(ax, ay, cx, cy, bx, by)
+  ) {
+    return true;
+  }
+
+  if (
+    Math.abs(o2) <= epsilon &&
+    onSegment(ax, ay, dx, dy, bx, by)
+  ) {
+    return true;
+  }
+
+  if (
+    Math.abs(o3) <= epsilon &&
+    onSegment(cx, cy, ax, ay, dx, dy)
+  ) {
+    return true;
+  }
+
+  if (
+    Math.abs(o4) <= epsilon &&
+    onSegment(cx, cy, bx, by, dx, dy)
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
-// Return a random value in a range.
-function randomRange(lo, hi) {
-  return lo + Math.random() * (hi - lo);
+// ============================================================
+// 3. AUDIO
+// ============================================================
+
+function initAudio() {
+  if (audioInitialized) return;
+
+  audioInitialized = true;
+
+  // Eight independent HTML Audio elements.
+  // The four action variants reuse the existing pluck asset.
+
+  audioWater = new Audio("/assets/water.mp3");
+  audioWater.volume = 0.20;
+  audioWater.loop = true;
+  audioWater.preload = "auto";
+
+  audioSparrow = new Audio("/assets/sparrow.mp3");
+  audioSparrow.volume = 0.24;
+  audioSparrow.preload = "auto";
+
+  audioCrow = new Audio("/assets/crow.mp3");
+  audioCrow.volume = 0.22;
+  audioCrow.preload = "auto";
+
+  audioPluck = new Audio("/assets/pluck.mp3");
+  audioPluck.volume = 0.48;
+  audioPluck.preload = "auto";
+
+  audioDheel = new Audio("/assets/pluck.mp3");
+  audioDheel.volume = 0.28;
+  audioDheel.playbackRate = 1.30;
+  audioDheel.preload = "auto";
+
+  audioKhench = new Audio("/assets/pluck.mp3");
+  audioKhench.volume = 0.28;
+  audioKhench.playbackRate = 0.80;
+  audioKhench.preload = "auto";
+
+  audioKatGai = new Audio("/assets/pluck.mp3");
+  audioKatGai.volume = 0.35;
+  audioKatGai.playbackRate = 1.60;
+  audioKatGai.preload = "auto";
+
+  audioManjaGaya = new Audio("/assets/pluck.mp3");
+  audioManjaGaya.volume = 0.30;
+  audioManjaGaya.playbackRate = 0.55;
+  audioManjaGaya.preload = "auto";
+
+  aiSparrowTimer = 4 + Math.random() * 5;
+  aiCrowTimer = 12 + Math.random() * 13;
+
+  try {
+    audioWater.play().catch(() => {});
+  } catch (e) {
+    console.warn("Water audio unavailable:", e);
+  }
 }
 
-// Recompute canvas size, cover-fit scene geometry, origins, and hit zones.
+function playPluck(rate) {
+  if (!audioPluck) return;
+
+  lastPluckTime = timeAccumulator;
+
+  try {
+    audioPluck.currentTime = 0;
+    audioPluck.playbackRate = rate;
+    audioPluck.play().catch(() => {});
+  } catch (e) {
+    // Audio failure must not interrupt gameplay.
+  }
+}
+
+function scheduleAmbient(dt) {
+  if (!audioInitialized || paused) return;
+
+  aiSparrowTimer -= dt;
+  aiCrowTimer -= dt;
+
+  if (aiSparrowTimer <= 0) {
+    if (audioSparrow) {
+      try {
+        audioSparrow.currentTime = 0;
+        audioSparrow.play().catch(() => {});
+      } catch (e) {
+        // Ambient audio is optional.
+      }
+    }
+
+    aiSparrowTimer = 4 + Math.random() * 5;
+  }
+
+  if (aiCrowTimer <= 0) {
+    if (audioCrow) {
+      try {
+        audioCrow.currentTime = 0;
+        audioCrow.play().catch(() => {});
+      } catch (e) {
+        // Ambient audio is optional.
+      }
+    }
+
+    aiCrowTimer = 12 + Math.random() * 13;
+  }
+}
+
+// ============================================================
+// 4. LAYOUT
+// ============================================================
+
 function recomputeLayout() {
-  const rect = canvas.getBoundingClientRect();
-  const cssW = Math.max(1, Math.round(rect.width || window.innerWidth));
-  const cssH = Math.max(1, Math.round(rect.height || window.innerHeight));
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const newW = Math.max(1, Math.round(cssW * dpr));
-  const newH = Math.max(1, Math.round(cssH * dpr));
-  const oldW = W || newW;
-  const oldH = H || newH;
+  const oldW = W;
+  const oldH = H;
 
-  if (canvas.width !== newW || canvas.height !== newH) {
-    canvas.width = newW;
-    canvas.height = newH;
-  }
+  W = window.innerWidth;
+  H = window.innerHeight;
 
-  W = canvas.width;
-  H = canvas.height;
-  lastCssW = cssW;
-  lastCssH = cssH;
-
-  const sceneAspect = 1536 / 864;
-  const canvasAspect = W / H;
-  if (canvasAspect < sceneAspect) {
-    coverH = H;
-    coverW = H * sceneAspect;
-    coverX = (W - coverW) / 2;
-    coverY = 0;
-  } else {
-    coverW = W;
-    coverH = W / sceneAspect;
-    coverX = 0;
-    coverY = (H - coverH) / 2;
-  }
+  canvas.width = W;
+  canvas.height = H;
 
   boyHandX = 0.53 * W;
   boyHandY = 0.60 * H;
 
-  const buttonW = Math.min(0.34 * W, 210 * dpr);
-  const buttonH = Math.min(0.085 * H, 74 * dpr);
-  const buttonY = H - buttonH - 0.035 * H;
-  const side = 0.055 * W;
-  const pad = 8 * dpr;
+  player.size = 0.14 * W;
+  ai.size = 0.11 * W;
 
-  dheelZone = { x: side - pad, y: buttonY - pad, w: buttonW + pad * 2, h: buttonH + pad * 2 };
-  khenchZone = { x: W - side - buttonW - pad, y: buttonY - pad, w: buttonW + pad * 2, h: buttonH + pad * 2 };
-  pauseZone = { x: W - 0.055 * W - 40 * dpr - pad, y: 0.035 * H - pad, w: 40 * dpr + pad * 2, h: 40 * dpr + pad * 2 };
+  dheelZone = {
+    x: 0.05 * W - 8,
+    y: 0.86 * H - 8,
+    w: 0.40 * W + 16,
+    h: 0.10 * H + 16
+  };
 
-  if (oldW !== W || oldH !== H) {
-    if (player.x || player.y) {
-      player.x = clamp(player.x * W / oldW, 0.15 * W, 0.88 * W);
-      player.y = clamp(player.y * H / oldH, 0.14 * H, 0.48 * H);
-      ai.x = clamp(ai.x * W / oldW, 0.10 * W, 0.88 * W);
-      ai.y = clamp(ai.y * H / oldH, 0.10 * H, 0.55 * H);
-      enforceSpawnSeparation();
+  khenchZone = {
+    x: 0.55 * W - 8,
+    y: 0.86 * H - 8,
+    w: 0.40 * W + 16,
+    h: 0.10 * H + 16
+  };
+
+  pauseZone = {
+    x: 0.86 * W - 8,
+    y: 0.02 * H - 8,
+    w: 0.10 * W + 16,
+    h: 0.06 * H + 16
+  };
+
+  homePlayZone = {
+    x: 0.5 * W - 110,
+    y: 0.60 * H - 35,
+    w: 220,
+    h: 70
+  };
+
+  if (oldW > 0 && oldH > 0) {
+    player.x = player.x / oldW * W;
+    player.y = player.y / oldH * H;
+
+    ai.x = ai.x / oldW * W;
+    ai.y = ai.y / oldH * H;
+  }
+
+  computeCoverRect();
+}
+
+function computeCoverRect() {
+  if (!sceneReady || !sceneImage) {
+    coverX = 0;
+    coverY = 0;
+    coverW = W;
+    coverH = H;
+    return;
+  }
+
+  const imageW = sceneImage.naturalWidth;
+  const imageH = sceneImage.naturalHeight;
+
+  if (imageW <= 0 || imageH <= 0) {
+    coverX = 0;
+    coverY = 0;
+    coverW = W;
+    coverH = H;
+    return;
+  }
+
+  const scale = Math.max(W / imageW, H / imageH);
+
+  coverW = imageW * scale;
+  coverH = imageH * scale;
+
+  coverX = (W - coverW) / 2;
+  coverY = (H - coverH) / 2;
+}
+
+// ============================================================
+// 5. INPUT
+// ============================================================
+
+function handlePointerDown(event) {
+  if (event.cancelable) {
+    event.preventDefault();
+  }
+
+  // First user interaction unlocks HTML Audio.
+
+  if (!audioInitialized) {
+    initAudio();
+  }
+
+  if (!canvas) return;
+
+  const rect = canvas.getBoundingClientRect();
+
+  if (rect.width <= 0 || rect.height <= 0) return;
+
+  const x =
+    (event.clientX - rect.left) *
+    (canvas.width / rect.width);
+
+  const y =
+    (event.clientY - rect.top) *
+    (canvas.height / rect.height);
+
+  if (gameState === "home") {
+    if (inZone(x, y, homePlayZone)) {
+      resetLevel(1);
+      transitionState("playing");
+      pushPrompt("FLY YOUR KITE!", "#FFFAEB", 1.5);
+    }
+
+    return;
+  }
+
+  if (gameState !== "playing") return;
+
+  if (inZone(x, y, pauseZone)) {
+    paused = !paused;
+
+    if (audioWater) {
+      try {
+        if (paused) {
+          audioWater.pause();
+        } else {
+          audioWater.play().catch(() => {});
+        }
+      } catch (e) {
+        // Continue even if audio cannot resume.
+      }
+    }
+
+    return;
+  }
+
+  if (paused) return;
+
+  if (inZone(x, y, dheelZone)) {
+    player.vy = -200;
+
+    manja = Math.min(1, manja + 0.10);
+
+    pushPrompt("DHEEL", "#00BFFF", 0.8);
+
+    playPluck(1.30);
+
+    if (audioDheel) {
+      try {
+        audioDheel.currentTime = 0;
+        audioDheel.play().catch(() => {});
+      } catch (e) {
+        // Optional action sound.
+      }
+    }
+
+    return;
+  }
+
+  if (inZone(x, y, khenchZone)) {
+    player.vy = 200;
+
+    manja = Math.max(0, manja - 0.05);
+
+    pushPrompt("KHENCH", "#FF3B30", 0.8);
+
+    playPluck(0.80);
+
+    if (audioKhench) {
+      try {
+        audioKhench.currentTime = 0;
+        audioKhench.play().catch(() => {});
+      } catch (e) {
+        // Optional action sound.
+      }
     }
   }
 }
 
-// Poll CSS dimensions from RAF and recompute when they change.
-function pollResize() {
-  const rect = canvas.getBoundingClientRect();
-  const cw = Math.max(1, Math.round(rect.width || window.innerWidth));
-  const ch = Math.max(1, Math.round(rect.height || window.innerHeight));
-  if (cw !== lastCssW || ch !== lastCssH) recomputeLayout();
+// ============================================================
+// 6. STATE MANAGEMENT
+// ============================================================
+
+function transitionState(nextState) {
+  const validStates = [
+    "home",
+    "playing",
+    "katching",
+    "levelClear",
+    "levelFail"
+  ];
+
+  if (!validStates.includes(nextState)) return;
+
+  gameState = nextState;
 }
 
-// Ensure spawn/layout separation is at least 35 percent of canvas width.
-function enforceSpawnSeparation() {
-  const minD = 0.35 * W;
-  let dx = ai.x - player.x;
-  let dy = ai.y - player.y;
-  let d = Math.hypot(dx, dy);
-  if (d >= minD) return;
-  if (d < 0.001) { dx = -1; dy = 0; d = 1; }
-  const need = minD - d;
-  ai.x += dx / d * need;
-  ai.y += dy / d * need;
-  ai.x = clamp(ai.x, 0.10 * W, 0.88 * W);
-  ai.y = clamp(ai.y, 0.10 * H, 0.55 * H);
-  dx = ai.x - player.x;
-  dy = ai.y - player.y;
-  d = Math.hypot(dx, dy);
-  if (d < minD) {
-    ai.x = 0.10 * W;
-    ai.y = 0.10 * H;
-  }
-}
+function resetLevel(n) {
+  level = n;
 
-// Explicitly reset every level-scoped gameplay value.
-function resetLevel() {
+  levelTimeLeft = Math.max(30, 62 - n * 2);
+
   player.x = 0.62 * W;
   player.y = 0.30 * H;
   player.vx = 0;
   player.vy = 0;
+
   ai.x = 0.22 * W;
   ai.y = 0.22 * H;
   ai.vx = 0;
   ai.vy = 0;
+
+  ai.huntTimer = 8.0;
+  ai.retreatTimer = 0;
+
   manja = 0.3;
-  levelTimeLeft = getLevelDuration(level);
+
   spawnGrace = 2.0;
-  aiHuntingTimer = 8.0;
-  aiRetreatTimer = 0;
-  aiAttackTimer = 0;
-  lastPluckTime = 0;
-  cutVictim = "";
-  failReason = "";
   stateTimer = 0;
-  enforceSpawnSeparation();
-}
 
-// Add a prompt to the on-canvas queue.
-function queuePrompt(text, color, duration) {
-  prompts.push({ text: text, color: color, timeLeft: duration, duration: duration });
-}
+  aiWasCut = false;
+  playerCut = false;
 
-// Update queued prompt timers.
-function updatePrompts(dt) {
-  for (let i = prompts.length - 1; i >= 0; i--) {
-    prompts[i].timeLeft -= dt;
-    if (prompts[i].timeLeft <= 0) prompts.splice(i, 1);
+  scheduledClearPluckAt = -1;
+  failReason = "LEVEL FAIL";
+
+  promptQueue = [];
+
+  paused = false;
+
+  if (audioWater && audioInitialized) {
+    try {
+      if (audioWater.paused) {
+        audioWater.play().catch(() => {});
+      }
+    } catch (e) {
+      // Gameplay does not depend on background audio.
+    }
   }
 }
 
-// Create all HTML Audio objects after the first user gesture.
-function initAudio() {
-  if (audioReady) return;
-  audioReady = true;
-  audioWater = new Audio("public/assets/water.mp3");
-  audioWater.loop = true;
-  audioWater.volume = 0.30;
-  audioSparrow = new Audio("public/assets/sparrow.mp3");
-  audioSparrow.volume = 0.45;
-  audioCrow = new Audio("public/assets/crow.mp3");
-  audioCrow.volume = 0.40;
-  audioPluck = new Audio("public/assets/pluck.mp3");
-  audioPluck.volume = 0.50;
-  voiceDheel = makeOptionalVoice("public/assets/dheel.mp3");
-  voiceKhench = makeOptionalVoice("public/assets/khench.mp3");
-  voiceKatGai = makeOptionalVoice("public/assets/kat-gai.mp3");
-  voiceManjaGaya = makeOptionalVoice("public/assets/manja-gaya.mp3");
-  audioWater.play().catch(function () {});
-}
-
-// Create an optional voice Audio safely.
-function makeOptionalVoice(src) {
-  try {
-    const a = new Audio(src);
-    if (a) a.volume = 0.65;
-    a.addEventListener("error", function () { a._missing = true; }, { once: true });
-    return a;
-  } catch (e) {
-    return null;
-  }
-}
-
-// Play an optional voice if it exists and has not failed.
-function playVoice(a) {
-  try {
-    if (!a || a._missing) return;
-    a.currentTime = 0;
-    a.play().catch(function () {});
-  } catch (e) {}
-}
-
-// Play the shared pluck with a pitch variation.
-function playPluck(rate) {
-  if (!audioPluck) return;
-  try {
-    audioPluck.pause();
-    audioPluck.playbackRate = rate;
-    audioPluck.currentTime = 0;
-    audioPluck.play().catch(function () {});
-  } catch (e) {}
-}
-
-// Update ambient bird scheduling using only RAF time.
-function updateAmbient(dt) {
-  if (!audioReady) return;
-  sparrowCountdown -= dt;
-  crowCountdown -= dt;
-  if (sparrowCountdown <= 0) {
-    try { audioSparrow.currentTime = 0; audioSparrow.play().catch(function () {}); } catch (e) {}
-    sparrowCountdown = randomRange(4, 9);
-  }
-  if (crowCountdown <= 0) {
-    try { audioCrow.currentTime = 0; audioCrow.play().catch(function () {}); } catch (e) {}
-    crowCountdown = randomRange(12, 25);
-  }
-}
-
-// Test whether a point is inside a rectangle.
-function hit(z, x, y) {
-  return z && x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h;
-}
-
-// Apply the DHEEL impulse.
-function doDheel() {
-  if (gameState !== "playing" || paused) return;
-  player.vy = -200;
-  manja = clamp(manja + 0.10, 0, 1);
-  queuePrompt("DHEEL", "#00BFFF", 0.8);
-  playPluck(1.30);
-  playVoice(voiceDheel);
-}
-
-// Apply the KHENCH impulse.
-function doKhench() {
-  if (gameState !== "playing" || paused) return;
-  player.vy = 200;
-  manja = clamp(manja - 0.05, 0, 1);
-  queuePrompt("KHENCH", "#FF3B30", 0.8);
-  playPluck(0.80);
-  playVoice(voiceKhench);
-}
-
-// Handle all pointer input through one canvas listener.
-function onPointerDown(ev) {
-  ev.preventDefault();
-  initAudio();
-  const rect = canvas.getBoundingClientRect();
-  const x = (ev.clientX - rect.left) * canvas.width / rect.width;
-  const y = (ev.clientY - rect.top) * canvas.height / rect.height;
-  if (hit(pauseZone, x, y)) { paused = !paused; return; }
-  if (hit(dheelZone, x, y)) { doDheel(); return; }
-  if (hit(khenchZone, x, y)) { doKhench(); }
-}
-
-// Return orientation for three points.
-function orient(ax, ay, bx, by, cx, cy) {
-  return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-}
-
-// Return true when two closed line segments intersect.
-function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
-  const o1 = orient(ax, ay, bx, by, cx, cy);
-  const o2 = orient(ax, ay, bx, by, dx, dy);
-  const o3 = orient(cx, cy, dx, dy, ax, ay);
-  const o4 = orient(cx, cy, dx, dy, bx, by);
-  const eps = 0.0001;
-  if (((o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps)) &&
-      ((o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps))) return true;
-  return false;
-}
-
-// Resolve a string crossing conservatively.
-function checkStringCrossing() {
-  const kiteDistance = Math.hypot(player.x - ai.x, player.y - ai.y);
-  if (kiteDistance > 0.35 * canvas.width) return;
-  if (!segmentsIntersect(boyHandX, boyHandY, player.x, player.y, ai.x, ai.y, canvas.width, canvas.height)) return;
-  const playerStringLength = Math.hypot(player.x - boyHandX, player.y - boyHandY);
-  if (playerStringLength < 0.15 * canvas.height) return;
-  const aiSharpness = Math.min(0.85, 0.30 + (level - 1) * 0.04);
-  if (manja >= aiSharpness + 0.08) {
-    cutAI();
-    return;
-  }
-  if (manja <= aiSharpness - 0.08) {
-    cutPlayer();
-    return;
-  }
-  if (elapsed - lastPluckTime >= 0.6) {
-    playPluck(1.00);
-    lastPluckTime = elapsed;
-  }
-  pushKitesApart();
-}
-
-// Separate kites slightly after a neutral string contact.
-function pushKitesApart() {
-  let dx = player.x - ai.x;
-  let dy = player.y - ai.y;
-  let d = Math.hypot(dx, dy);
-  if (d < 0.001) { dx = 1; dy = 0; d = 1; }
-  const push = 0.018 * W;
-  player.x = clamp(player.x + dx / d * push, 0.15 * W, 0.88 * W);
-  player.y = clamp(player.y + dy / d * push, 0.14 * H, 0.48 * H);
-  ai.x = clamp(ai.x - dx / d * push, 0.10 * W, 0.88 * W);
-  ai.y = clamp(ai.y - dy / d * push, 0.10 * H, 0.55 * H);
-}
-
-// Cut the AI string and enter katching.
-function cutAI() {
-  queuePrompt("KAT GAI!", "#FF0000", 1.2);
-  playPluck(1.60);
-  playVoice(voiceKatGai);
-  beginKatching("ai");
-}
-
-// Cut the player string and enter katching.
-function cutPlayer() {
-  queuePrompt("KAT GAI!", "#FF0000", 1.2);
-  playPluck(1.60);
-  playVoice(voiceManjaGaya);
-  beginKatching("player");
-}
-
-// Begin the 1.5 second katching state.
-function beginKatching(victim) {
-  gameState = "katching";
-  cutVictim = victim;
-  stateTimer = 1.5;
-}
-
-// Begin a level failure.
-function beginLevelFail(reason) {
+function beginKatching(who) {
   if (gameState !== "playing") return;
-  gameState = "levelFail";
+
+  aiWasCut = who === "ai";
+  playerCut = who === "player";
+
+  transitionState("katching");
+
+  stateTimer = 1.5;
+
+  pushPrompt("KAT GAI!", "#FF0000", 1.2);
+
+  playPluck(1.6);
+
+  if (audioKatGai) {
+    try {
+      audioKatGai.currentTime = 0;
+      audioKatGai.play().catch(() => {});
+    } catch (e) {
+      // Optional cut sound.
+    }
+  }
+}
+
+function beginLevelClear() {
+  transitionState("levelClear");
+
+  stateTimer = 2.5;
+
+  pushPrompt("LEVEL CLEAR", "#00FF00", 2.0);
+
+  playPluck(1.6);
+
+  // The second celebration note is scheduled using game time.
+  scheduledClearPluckAt = timeAccumulator + 0.5;
+}
+
+function beginLevelFail(reason) {
   failReason = reason || "LEVEL FAIL";
+
+  transitionState("levelFail");
+
   stateTimer = 2.0;
-  queuePrompt(failReason === "TIME OUT" ? "TIME OUT" : "LEVEL FAIL", "#FF1744", 1.2);
+
+  scheduledClearPluckAt = -1;
+
+  pushPrompt(failReason, "#FF1744", 1.5);
+
   playPluck(0.55);
 }
 
-// Create the level-clear particle bumper.
-function makeClearParticles() {
-  confetti = [];
-  stars = [];
-  for (let i = 0; i < 24; i++) {
-    confetti.push({ x: Math.random() * W, y: -Math.random() * H * 0.25, vy: randomRange(70, 180), spin: randomRange(-5, 5), a: randomRange(0, Math.PI * 2), life: 1 });
-  }
-  for (let i = 0; i < 8; i++) {
-    const a = Math.PI * 2 * i / 8;
-    stars.push({ x: W * 0.5, y: H * 0.5, vx: Math.cos(a) * randomRange(70, 150), vy: Math.sin(a) * randomRange(70, 150), life: 1 });
+function cutAI() {
+  aiWasCut = true;
+  playerCut = false;
+
+  ai.vy = Math.max(120, ai.vy);
+}
+
+function cutPlayer() {
+  playerCut = true;
+  aiWasCut = false;
+
+  player.vy = Math.max(120, player.vy);
+
+  if (audioManjaGaya) {
+    try {
+      audioManjaGaya.currentTime = 0;
+      audioManjaGaya.play().catch(() => {});
+    } catch (e) {
+      // Optional losing sound.
+    }
   }
 }
 
-// Enter level clear and initialize its bumper.
-function beginLevelClear() {
-  gameState = "levelClear";
-  stateTimer = 2.5;
-  queuePrompt("LEVEL CLEAR", "#00FF00", 1.2);
-  makeClearParticles();
-  playPluck(1.60);
+// ============================================================
+// 7. PHYSICS
+// ============================================================
+
+function updatePlayerPhysics(dt) {
+  player.vx = 70 * Math.sin(sineAccumulator * 0.7);
+
+  player.vy *= Math.pow(0.94, dt * 60);
+
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+
+  player.x = Math.max(
+    0.15 * W,
+    Math.min(0.88 * W, player.x)
+  );
+
+  player.y = Math.max(
+    0.14 * H,
+    Math.min(0.48 * H, player.y)
+  );
+
+  if (
+    (player.y <= 0.14 * H && player.vy < 0) ||
+    (player.y >= 0.48 * H && player.vy > 0)
+  ) {
+    player.vy = 0;
+  }
 }
 
-// Update player motion, AI behavior, sharpness, timer, and crossing.
+function updateAIPhysics(dt) {
+  if (ai.huntTimer > 0) {
+    ai.huntTimer = Math.max(0, ai.huntTimer - dt);
+
+    ai.vx =
+      40 * Math.sin(sineAccumulator * 0.85 + 0.8);
+
+    ai.vy =
+      20 * Math.sin(sineAccumulator * 1.15 + 0.5);
+  } else {
+    const dx = player.x - ai.x;
+    const dy = player.y - ai.y;
+
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if (distance > 0.001) {
+      ai.vx = dx / distance * 55;
+      ai.vy = dy / distance * 55;
+    } else {
+      ai.vx = 0;
+      ai.vy = 0;
+    }
+
+    const speed = Math.sqrt(
+      ai.vx * ai.vx + ai.vy * ai.vy
+    );
+
+    if (speed > 70) {
+      ai.vx = ai.vx / speed * 70;
+      ai.vy = ai.vy / speed * 70;
+    }
+  }
+
+  ai.x += ai.vx * dt;
+  ai.y += ai.vy * dt;
+
+  if (ai.x < 0.10 * W) {
+    ai.x = 0.10 * W;
+    ai.vx = Math.abs(ai.vx);
+  }
+
+  if (ai.x > 0.88 * W) {
+    ai.x = 0.88 * W;
+    ai.vx = -Math.abs(ai.vx);
+  }
+
+  if (ai.y < 0.10 * H) {
+    ai.y = 0.10 * H;
+    ai.vy = Math.abs(ai.vy);
+  }
+
+  if (ai.y > 0.55 * H) {
+    ai.y = 0.55 * H;
+    ai.vy = -Math.abs(ai.vy);
+  }
+}
+
+function updateManja(dt) {
+  if (player.y < 0.28 * H) {
+    manja += 0.35 * dt;
+  } else if (player.y > 0.42 * H) {
+    manja -= 0.25 * dt;
+  } else {
+    manja -= 0.05 * dt;
+  }
+
+  manja = Math.max(0, Math.min(1, manja));
+}
+
+// ============================================================
+// 8. STRING-CROSSING AND CUT DETECTION
+// ============================================================
+
+function checkStringCrossing() {
+  if (gameState !== "playing") return;
+
+  if (spawnGrace > 0) return;
+
+  const dx = player.x - ai.x;
+  const dy = player.y - ai.y;
+
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  if (dist > 0.35 * W) return;
+
+  const crossing = segmentsIntersect(
+    boyHandX,
+    boyHandY,
+    player.x,
+    player.y,
+    ai.x,
+    ai.y,
+    W,
+    H
+  );
+
+  if (!crossing) return;
+
+  const stringDX = player.x - boyHandX;
+  const stringDY = player.y - boyHandY;
+
+  const playerStrLen = Math.sqrt(
+    stringDX * stringDX +
+    stringDY * stringDY
+  );
+
+  if (playerStrLen < 0.15 * H) return;
+
+  const aiSharp = Math.min(
+    0.85,
+    0.30 + (level - 1) * 0.04
+  );
+
+  if (manja > aiSharp + 0.08) {
+    cutAI();
+    beginKatching("ai");
+    return;
+  }
+
+  if (manja < aiSharp - 0.08) {
+    cutPlayer();
+    beginKatching("player");
+    return;
+  }
+
+  // Similar string sharpness: brushing without a cut.
+
+  if (timeAccumulator - lastPluckTime >= 0.45) {
+    playPluck(1.0);
+  }
+}
+
+// ============================================================
+// 9. GAME UPDATE
+// ============================================================
+
+function update(dt) {
+  timeAccumulator += dt;
+
+  if (!paused) {
+    sineAccumulator += dt;
+  }
+
+  switch (gameState) {
+    case "home":
+      updateHome(dt);
+      break;
+
+    case "playing":
+      updatePlaying(dt);
+      break;
+
+    case "katching":
+      updateKatching(dt);
+      break;
+
+    case "levelClear":
+      updateLevelClear(dt);
+      break;
+
+    case "levelFail":
+      updateLevelFail(dt);
+      break;
+
+    default:
+      transitionState("home");
+      break;
+  }
+
+  if (
+    audioInitialized &&
+    gameState === "playing" &&
+    !paused
+  ) {
+    scheduleAmbient(dt);
+  }
+
+  if (!paused) {
+    updatePrompts(dt);
+  }
+}
+
+function updateHome(dt) {
+  // The home screen remains animated by the RAF renderer.
+  // No gameplay timer advances here.
+}
+
 function updatePlaying(dt) {
+  if (paused) return;
+
   levelTimeLeft -= dt;
+
   if (levelTimeLeft <= 0) {
     levelTimeLeft = 0;
     beginLevelFail("TIME OUT");
     return;
   }
 
-  spawnGrace = Math.max(0, spawnGrace - dt);
-  aiHuntingTimer = Math.max(0, aiHuntingTimer - dt);
+  updatePlayerPhysics(dt);
+  updateAIPhysics(dt);
+  updateManja(dt);
 
-  player.vx = 70 * Math.sin(elapsed * 0.7);
-  player.vy *= Math.pow(0.94, dt * 60);
-  player.x += player.vx * dt;
-  player.y += player.vy * dt;
-
-  const pxMin = 0.15 * W, pxMax = 0.88 * W;
-  const pyMin = 0.14 * H, pyMax = 0.48 * H;
-  if (player.x < pxMin) { player.x = pxMin; player.vx = Math.abs(player.vx); }
-  if (player.x > pxMax) { player.x = pxMax; player.vx = -Math.abs(player.vx); }
-  player.y = clamp(player.y, pyMin, pyMax);
-
-  if (player.y < 0.28 * H) manja += 0.35 * dt;
-  else if (player.y > 0.42 * H) manja -= 0.25 * dt;
-  else manja -= 0.05 * dt;
-  manja = clamp(manja, 0, 1);
-
-  updateAI(dt);
-
-  if (spawnGrace <= 0) checkStringCrossing();
-}
-
-// Update AI drift, hunt, failed-attempt retreat, and speed cap.
-function updateAI(dt) {
-  if (aiHuntingTimer > 0) {
-    ai.vx = 40 * Math.sin(elapsed * 0.53);
-    ai.vy = 20 * Math.sin(elapsed * 0.79 + 1.4);
-  } else if (aiRetreatTimer > 0) {
-    aiRetreatTimer = Math.max(0, aiRetreatTimer - dt);
-    let dx = ai.x - player.x;
-    let dy = ai.y - player.y;
-    let d = Math.hypot(dx, dy) || 1;
-    ai.vx = dx / d * 45;
-    ai.vy = dy / d * 45;
-    if (aiRetreatTimer <= 0) aiAttackTimer = 0;
-  } else {
-    aiAttackTimer += dt;
-    let dx = player.x - ai.x;
-    let dy = player.y - ai.y;
-    let d = Math.hypot(dx, dy) || 1;
-    ai.vx = dx / d * 55;
-    ai.vy = dy / d * 55;
-    if (aiAttackTimer >= 4) {
-      aiAttackTimer = 0;
-      aiRetreatTimer = 3;
-      queuePrompt("SAVADHAN", "#FFD700", 0.8);
-    } else if (d < 0.22 * W && aiAttackTimer > 0.8 && aiAttackTimer < 0.85) {
-      queuePrompt("KHATRA", "#FF4500", 0.8);
-    }
+  if (spawnGrace > 0) {
+    spawnGrace = Math.max(0, spawnGrace - dt);
+    return;
   }
 
-  const speed = Math.hypot(ai.vx, ai.vy);
-  if (speed > 70) {
-    ai.vx = ai.vx / speed * 70;
-    ai.vy = ai.vy / speed * 70;
-  }
-
-  ai.x += ai.vx * dt;
-  ai.y += ai.vy * dt;
-  ai.x = clamp(ai.x, 0.10 * W, 0.88 * W);
-  ai.y = clamp(ai.y, 0.10 * H, 0.55 * H);
+  checkStringCrossing();
 }
 
-// Update the katching transition timer.
 function updateKatching(dt) {
   stateTimer -= dt;
-  if (stateTimer > 0) return;
-  if (cutVictim === "ai") beginLevelClear();
-  else {
-    gameState = "levelFail";
-    stateTimer = 2.0;
-    failReason = "LEVEL FAIL";
-    queuePrompt("LEVEL FAIL", "#FF1744", 1.2);
-    playPluck(0.55);
-  }
-}
 
-// Update clear bumper and advance through a full reset.
-function updateLevelClear(dt) {
-  stateTimer -= dt;
-  for (let i = 0; i < confetti.length; i++) {
-    confetti[i].y += confetti[i].vy * dt;
-    confetti[i].a += confetti[i].spin * dt;
-    confetti[i].life = clamp(stateTimer / 2.5, 0, 1);
+  // The cut kite falls during the katching animation.
+
+  if (aiWasCut) {
+    ai.x += ai.vx * dt * 0.3;
+    ai.y += Math.max(120, ai.vy) * dt;
+    ai.vy += 110 * dt;
   }
-  for (let i = 0; i < stars.length; i++) {
-    stars[i].x += stars[i].vx * dt;
-    stars[i].y += stars[i].vy * dt;
-    stars[i].life = clamp(stateTimer / 2.5, 0, 1);
+
+  if (playerCut) {
+    player.x += player.vx * dt * 0.3;
+    player.y += Math.max(120, player.vy) * dt;
+    player.vy += 110 * dt;
   }
-  if (stateTimer <= 2.0 && stateTimer + dt > 2.0) playPluck(1.90);
+
   if (stateTimer <= 0) {
-    level += 1;
-    resetLevel();
-    gameState = "playing";
+    if (aiWasCut) {
+      beginLevelClear();
+    } else {
+      beginLevelFail("LEVEL FAIL");
+    }
   }
 }
 
-// Update fail timer and restart the same level through a full reset.
+function updateLevelClear(dt) {
+  if (
+    scheduledClearPluckAt >= 0 &&
+    timeAccumulator >= scheduledClearPluckAt
+  ) {
+    scheduledClearPluckAt = -1;
+    playPluck(1.9);
+  }
+
+  stateTimer -= dt;
+
+  if (stateTimer <= 0) {
+    resetLevel(level + 1);
+    transitionState("playing");
+
+    pushPrompt(
+      "LEVEL " + level,
+      "#FFD700",
+      1.2
+    );
+  }
+}
+
 function updateLevelFail(dt) {
   stateTimer -= dt;
+
   if (stateTimer <= 0) {
-    resetLevel();
-    gameState = "playing";
+    resetLevel(level);
+    transitionState("playing");
+
+    pushPrompt(
+      "TRY AGAIN!",
+      "#FFFAEB",
+      1.2
+    );
   }
 }
 
-// Draw the cover-fit background and fallback.
-function drawBackground() {
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = "#C88A4A";
-  ctx.fillRect(0, 0, W, H);
-  if (sceneReady) ctx.drawImage(scene, coverX, coverY, coverW, coverH);
+// ============================================================
+// 10. RENDERING
+// ============================================================
+
+function render() {
+  if (!ctx) return;
+
+  if (gameState === "home") {
+    renderHome();
+    renderDebugLine();
+    return;
+  }
+
+  renderScene();
+  renderStrings();
+  renderKites();
+
+  renderHUD();
+  renderMANJA();
+  renderButtons();
+
+  if (gameState === "levelClear") {
+    renderLevelClearBumper();
+  }
+
+  if (gameState === "levelFail") {
+    renderLevelFailBumper();
+  }
+
+  if (paused && gameState === "playing") {
+    ctx.save();
+
+    ctx.fillStyle = "rgba(0,0,0,0.46)";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    ctx.font = 'bold 43px "Arial Black", Arial, sans-serif';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = "#000000";
+    ctx.fillStyle = "#FFFAEB";
+
+    ctx.strokeText("PAUSED", W * 0.5, H * 0.43);
+    ctx.fillText("PAUSED", W * 0.5, H * 0.43);
+
+    ctx.font = "bold 17px Arial, sans-serif";
+    ctx.fillText(
+      "Tap the pause button to resume",
+      W * 0.5,
+      H * 0.50,
+      W * 0.9
+    );
+
+    ctx.restore();
+  }
+
+  renderPrompts();
+
+  // Always the final visual layer.
+  renderDebugLine();
 }
 
-// Draw the warm-white painted-thread cover.
-function drawThreadCover() {
+function renderHome() {
+  ctx.clearRect(0, 0, W, H);
+
+  ctx.fillStyle = "#C88A4A";
+  ctx.fillRect(0, 0, W, H);
+
+  if (sceneReady) {
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+
+    ctx.drawImage(
+      sceneImage,
+      coverX,
+      coverY,
+      coverW,
+      coverH
+    );
+
+    ctx.restore();
+  }
+
   ctx.save();
-  ctx.strokeStyle = "rgba(255, 250, 235, 0.95)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(boyHandX, boyHandY);
-  ctx.lineTo(0.53 * W, 0.40 * H);
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  ctx.font = 'bold 72px "Arial Black", Arial, sans-serif';
+  ctx.lineWidth = 8;
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#000000";
+  ctx.fillStyle = "#FFD700";
+
+  ctx.strokeText(
+    "PATANG",
+    W * 0.5,
+    H * 0.35,
+    W * 0.92
+  );
+
+  ctx.fillText(
+    "PATANG",
+    W * 0.5,
+    H * 0.35,
+    W * 0.92
+  );
+
+  ctx.font = "bold 28px Arial, sans-serif";
+  ctx.lineWidth = 3;
+  ctx.fillStyle = "#FFFAEB";
+
+  ctx.strokeText(
+    "A Kite Fight",
+    W * 0.5,
+    H * 0.42,
+    W * 0.9
+  );
+
+  ctx.fillText(
+    "A Kite Fight",
+    W * 0.5,
+    H * 0.42,
+    W * 0.9
+  );
+
+  const p = homePlayZone;
+
+  ctx.shadowColor = "rgba(0,0,0,0.4)";
+  ctx.shadowBlur = 16;
+  ctx.shadowOffsetY = 6;
+
+  roundedRectPath(
+    ctx,
+    p.x,
+    p.y,
+    p.w,
+    p.h,
+    18
+  );
+
+  ctx.fillStyle = "#FF1493";
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  ctx.strokeStyle = "#FFFFFF";
+  ctx.lineWidth = 3;
   ctx.stroke();
+
+  ctx.fillStyle = "#FFFFFF";
+  ctx.font = 'bold 32px "Arial Black", Arial, sans-serif';
+
+  ctx.fillText(
+    "PLAY",
+    W * 0.5,
+    p.y + p.h * 0.52
+  );
+
+  ctx.font = "bold 16px Arial, sans-serif";
+  ctx.fillStyle = "#FFFFFF";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(0,0,0,0.7)";
+
+  const instruction = "DHEEL to climb · KHENCH to dive";
+
+  ctx.strokeText(
+    instruction,
+    W * 0.5,
+    H * 0.68,
+    W * 0.94
+  );
+
+  ctx.fillText(
+    instruction,
+    W * 0.5,
+    H * 0.68,
+    W * 0.94
+  );
+
   ctx.restore();
 }
 
-// Draw both kite strings.
-function drawStrings() {
+function renderScene() {
+  ctx.clearRect(0, 0, W, H);
+
+  ctx.fillStyle = "#C88A4A";
+  ctx.fillRect(0, 0, W, H);
+
+  if (sceneReady) {
+    ctx.drawImage(
+      sceneImage,
+      coverX,
+      coverY,
+      coverW,
+      coverH
+    );
+  }
+}
+
+function renderStrings() {
   ctx.save();
-  ctx.strokeStyle = "#000000";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(ai.x, ai.y);
-  ctx.lineTo(W, H);
-  ctx.stroke();
+
+  ctx.lineCap = "round";
+
+  // Warm-white highlight beneath the player's black string.
+
   ctx.beginPath();
   ctx.moveTo(boyHandX, boyHandY);
   ctx.lineTo(player.x, player.y);
-  ctx.stroke();
-  ctx.restore();
-}
 
-// Draw a rotated diamond kite.
-function drawDiamond(k, size, fill, stroke, lineWidth, glow) {
-  ctx.save();
-  ctx.translate(k.x, k.y);
-  ctx.rotate(Math.atan2(k.vy, k.vx || 0.0001));
-  if (glow) {
-    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 20);
-    g.addColorStop(0, "rgba(255,20,147,0.45)");
-    g.addColorStop(1, "rgba(255,20,147,0)");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(0, 0, size * 0.85 + 20, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  ctx.strokeStyle = "rgba(255,250,235,0.95)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Player's string.
+
   ctx.beginPath();
-  ctx.moveTo(0, -size * 0.5);
-  ctx.lineTo(size * 0.42, 0);
-  ctx.lineTo(0, size * 0.5);
-  ctx.lineTo(-size * 0.42, 0);
-  ctx.closePath();
-  ctx.fillStyle = fill;
-  ctx.fill();
-  ctx.strokeStyle = stroke;
-  ctx.lineWidth = lineWidth;
+  ctx.moveTo(boyHandX, boyHandY);
+  ctx.lineTo(player.x, player.y);
+
+  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.lineWidth = 1;
   ctx.stroke();
+
+  // AI's string extends toward the lower-right corner.
+
+  ctx.beginPath();
+  ctx.moveTo(ai.x, ai.y);
+  ctx.lineTo(W, H);
+
+  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
   ctx.restore();
 }
 
-// Draw AI and player kites in required order.
-function drawKites() {
-  drawDiamond(ai, 0.11 * W, "#7B2FBE", "#4CAF50", 2, false);
-  drawDiamond(player, 0.14 * W, "#FF1493", "#FFFFFF", 3, true);
+function renderKites() {
+  drawKite(ai, false);
+  drawKite(player, true);
 }
 
-// Draw one dark HUD pill.
-function drawPill(x, y, w, h, text) {
+function drawKite(kite, isPlayer) {
+  const x = kite.x;
+  const y = kite.y;
+  const s = kite.size;
+
   ctx.save();
-  roundedPath(x, y, w, h, h * 0.45);
-  ctx.fillStyle = "#1a2340";
+
+  if (isPlayer) {
+    // Radial magenta glow extending beyond the diamond.
+
+    const glowRadius = s * 0.5 + 20;
+
+    const glow = ctx.createRadialGradient(
+      x,
+      y,
+      s * 0.15,
+      x,
+      y,
+      glowRadius
+    );
+
+    glow.addColorStop(0, "rgba(255,20,147,0.48)");
+    glow.addColorStop(0.55, "rgba(255,20,147,0.25)");
+    glow.addColorStop(1, "rgba(255,20,147,0)");
+
+    ctx.fillStyle = glow;
+
+    ctx.fillRect(
+      x - glowRadius,
+      y - glowRadius,
+      glowRadius * 2,
+      glowRadius * 2
+    );
+  }
+
+  // Main diamond.
+
+  ctx.beginPath();
+
+  ctx.moveTo(x, y - s * 0.58);
+  ctx.lineTo(x + s * 0.50, y);
+  ctx.lineTo(x, y + s * 0.58);
+  ctx.lineTo(x - s * 0.50, y);
+
+  ctx.closePath();
+
+  ctx.fillStyle = isPlayer
+    ? "#FF1493"
+    : "#7B2FBE";
+
   ctx.fill();
-  ctx.fillStyle = "#FFFFFF";
-  ctx.font = "bold " + Math.max(14, Math.round(h * 0.45)) + "px Arial, sans-serif";
+
+  ctx.strokeStyle = isPlayer
+    ? "#FFFFFF"
+    : "#4CAF50";
+
+  ctx.lineWidth = isPlayer ? 3 : 2;
+  ctx.lineJoin = "round";
+  ctx.stroke();
+
+  // Paper folds and bamboo cross-spars.
+
+  ctx.beginPath();
+  ctx.moveTo(x, y - s * 0.58);
+  ctx.lineTo(x, y + s * 0.58);
+
+  ctx.moveTo(x - s * 0.50, y);
+  ctx.lineTo(x + s * 0.50, y);
+
+  ctx.strokeStyle = isPlayer
+    ? "rgba(255,255,255,0.60)"
+    : "rgba(255,255,255,0.35)";
+
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Short fluttering tail.
+
+  const flutter =
+    Math.sin(sineAccumulator * 7 + (isPlayer ? 0 : 2)) *
+    s * 0.09;
+
+  ctx.beginPath();
+
+  ctx.moveTo(x, y + s * 0.58);
+
+  ctx.quadraticCurveTo(
+    x + flutter,
+    y + s * 0.78,
+    x - flutter * 0.5,
+    y + s * 0.98
+  );
+
+  ctx.strokeStyle = isPlayer
+    ? "#FFFFFF"
+    : "#4CAF50";
+
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function renderHUD() {
+  const pillY = 0.02 * H;
+  const pillH = 0.06 * H;
+
+  drawPill(
+    0.035 * W,
+    pillY,
+    0.22 * W,
+    pillH,
+    "LVL " + level,
+    "#FF1493",
+    "#FFFFFF"
+  );
+
+  const seconds = Math.max(
+    0,
+    Math.ceil(levelTimeLeft)
+  );
+
+  const minutesText = String(
+    Math.floor(seconds / 60)
+  ).padStart(2, "0");
+
+  const secondsText = String(
+    seconds % 60
+  ).padStart(2, "0");
+
+  const timerText =
+    minutesText + ":" + secondsText;
+
+  drawPill(
+    W * 0.5 - 55,
+    pillY,
+    110,
+    pillH,
+    timerText,
+    seconds <= 10 ? "#D32F2F" : "#222222",
+    "#FFFFFF"
+  );
+
+  drawPill(
+    0.86 * W,
+    pillY,
+    0.10 * W,
+    pillH,
+    paused ? "▶" : "Ⅱ",
+    "#222222",
+    "#FFFFFF"
+  );
+}
+
+function drawPill(x, y, w, h, label, fillColor, textColor) {
+  ctx.save();
+
+  roundedRectPath(
+    ctx,
+    x,
+    y,
+    w,
+    h,
+    Math.min(14, h * 0.35)
+  );
+
+  ctx.fillStyle = fillColor;
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(255,255,255,0.88)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = textColor;
+
+  ctx.font =
+    'bold ' +
+    Math.max(12, Math.min(19, h * 0.44)) +
+    'px "Arial Black", Arial, sans-serif';
+
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(text, x + w * 0.5, y + h * 0.52);
+
+  ctx.fillText(
+    label,
+    x + w * 0.5,
+    y + h * 0.53,
+    w * 0.91
+  );
+
   ctx.restore();
 }
 
-// Format seconds as MM:SS.
-function formatTime(seconds) {
-  const s = Math.max(0, Math.ceil(seconds));
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return String(m).padStart(2, "0") + ":" + String(r).padStart(2, "0");
-}
+function renderMANJA() {
+  const x = 0.05 * W;
+  const y = 0.105 * H;
 
-// Draw top HUD and pause control.
-function drawHUD() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const y = 0.035 * H;
-  const h = 40 * dpr;
-  drawPill(0.055 * W, y, 62 * dpr, h, "L" + level);
-  drawPill(W * 0.5 - 48 * dpr, y, 96 * dpr, h, formatTime(levelTimeLeft));
-  const px = W - 0.055 * W - 40 * dpr;
+  const barX = 0.35 * W;
+  const barY = y - 1;
+  const barW = 0.50 * W;
+  const barH = Math.max(13, 0.024 * H);
+
   ctx.save();
-  roundedPath(px, y, 40 * dpr, 40 * dpr, 9 * dpr);
-  ctx.fillStyle = "#1a2340";
-  ctx.fill();
-  ctx.fillStyle = "#FFFFFF";
-  if (paused) {
-    ctx.beginPath();
-    ctx.moveTo(px + 14 * dpr, y + 10 * dpr);
-    ctx.lineTo(px + 30 * dpr, y + 20 * dpr);
-    ctx.lineTo(px + 14 * dpr, y + 30 * dpr);
-    ctx.closePath();
-    ctx.fill();
-  } else {
-    ctx.fillRect(px + 12 * dpr, y + 10 * dpr, 5 * dpr, 20 * dpr);
-    ctx.fillRect(px + 23 * dpr, y + 10 * dpr, 5 * dpr, 20 * dpr);
-  }
-  ctx.restore();
-}
 
-// Return MANJA fill color from yellow through orange to red.
-function manjaColor(v) {
-  if (v < 0.5) {
-    const t = v * 2;
-    return "rgb(255," + Math.round(215 - 80 * t) + ",0)";
-  }
-  const t = (v - 0.5) * 2;
-  return "rgb(255," + Math.round(135 * (1 - t)) + ",0)";
-}
-
-// Draw MANJA label and bar.
-function drawManja() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const x = 0.055 * W;
-  const y = 0.035 * H + 52 * dpr;
-  const labelW = 62 * dpr;
-  const barW = Math.min(190 * dpr, 0.46 * W);
-  const barH = 24 * dpr;
-  ctx.save();
-  ctx.fillStyle = "#FFFFFF";
-  ctx.strokeStyle = "#000000";
-  ctx.lineWidth = 3;
-  ctx.font = "bold " + 13 * dpr + "px Arial Black, Arial, sans-serif";
+  ctx.font = 'bold 18px "Arial Black", Arial, sans-serif';
+  ctx.textBaseline = "middle";
   ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.strokeText("MANJA", x, y + barH * 0.5);
-  ctx.fillText("MANJA", x, y + barH * 0.5);
-  roundedPath(x + labelW, y, barW, barH, 8 * dpr);
-  ctx.fillStyle = "#1a2340";
+  ctx.lineJoin = "round";
+
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.fillStyle = "#FFFFFF";
+
+  ctx.strokeText(
+    "MANJA",
+    x,
+    barY + barH * 0.5
+  );
+
+  ctx.fillText(
+    "MANJA",
+    x,
+    barY + barH * 0.5
+  );
+
+  roundedRectPath(
+    ctx,
+    barX,
+    barY,
+    barW,
+    barH,
+    barH / 2
+  );
+
+  ctx.fillStyle = "rgba(0,0,0,0.72)";
   ctx.fill();
-  if (manja > 0) {
-    roundedPath(x + labelW + 3 * dpr, y + 3 * dpr, Math.max(1, (barW - 6 * dpr) * manja), barH - 6 * dpr, 5 * dpr);
-    ctx.fillStyle = manjaColor(manja);
+
+  const gradient = ctx.createLinearGradient(
+    barX,
+    barY,
+    barX + barW,
+    barY
+  );
+
+  gradient.addColorStop(0, "#FFE44D");
+  gradient.addColorStop(0.5, "#FF9820");
+  gradient.addColorStop(1, "#F12D28");
+
+  const fillW = barW * manja;
+
+  if (fillW > 0) {
+    roundedRectPath(
+      ctx,
+      barX,
+      barY,
+      fillW,
+      barH,
+      Math.min(barH / 2, fillW / 2)
+    );
+
+    ctx.fillStyle = gradient;
     ctx.fill();
   }
-  ctx.restore();
-}
 
-// Draw the active prompt queue.
-function drawPrompts() {
-  if (!prompts.length) return;
-  const p = prompts[0];
-  const alpha = clamp(p.timeLeft / Math.min(0.35, p.duration), 0, 1);
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.font = "bold 26px Arial Black, Arial, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = "#000000";
-  ctx.shadowColor = "#000000";
-  ctx.shadowBlur = 8;
-  ctx.strokeText(p.text, 0.5 * W, 0.20 * H);
-  ctx.fillStyle = p.color;
-  ctx.fillText(p.text, 0.5 * W, 0.20 * H);
-  ctx.restore();
-}
+  roundedRectPath(
+    ctx,
+    barX,
+    barY,
+    barW,
+    barH,
+    barH / 2
+  );
 
-// Draw one rectangular action button.
-function drawActionButton(z, fill, arrow, label) {
-  const pad = 8 * Math.min(window.devicePixelRatio || 1, 2);
-  const x = z.x + pad, y = z.y + pad, w = z.w - pad * 2, h = z.h - pad * 2;
-  ctx.save();
-  ctx.fillStyle = fill;
-  ctx.fillRect(x, y, w, h);
   ctx.strokeStyle = "#FFFFFF";
   ctx.lineWidth = 2;
-  ctx.strokeRect(x, y, w, h);
-  ctx.fillStyle = "#FFFFFF";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = "bold " + Math.max(18, Math.round(h * 0.31)) + "px Arial Black, Arial, sans-serif";
-  ctx.fillText(arrow + "  " + label, x + w * 0.5, y + h * 0.52);
+  ctx.stroke();
+
   ctx.restore();
 }
 
-// Draw both bottom controls.
-function drawButtons() {
-  drawActionButton(dheelZone, "#0878D1", "↑", "DHEEL");
-  drawActionButton(khenchZone, "#D62828", "↓", "KHENCH");
+function renderButtons() {
+  const y = 0.86 * H;
+  const h = 0.10 * H;
+
+  drawButton(
+    0.05 * W,
+    y,
+    0.40 * W,
+    h,
+    "#2196F3",
+    "up",
+    "DHEEL"
+  );
+
+  drawButton(
+    0.55 * W,
+    y,
+    0.40 * W,
+    h,
+    "#E53935",
+    "down",
+    "KHENCH"
+  );
 }
 
-// Draw a five-point star.
-function drawStar(x, y, radius, alpha) {
+function drawButton(x, y, w, h, color, direction, label) {
   ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.translate(x, y);
-  ctx.beginPath();
-  for (let i = 0; i < 10; i++) {
-    const r = i % 2 === 0 ? radius : radius * 0.45;
-    const a = -Math.PI / 2 + i * Math.PI / 5;
-    const px = Math.cos(a) * r, py = Math.sin(a) * r;
-    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-  }
-  ctx.closePath();
-  ctx.fillStyle = "#FFD700";
+
+  ctx.shadowColor = "rgba(0,0,0,0.35)";
+  ctx.shadowBlur = 9;
+  ctx.shadowOffsetY = 4;
+
+  roundedRectPath(
+    ctx,
+    x,
+    y,
+    w,
+    h,
+    Math.min(18, h * 0.22)
+  );
+
+  ctx.fillStyle = color;
   ctx.fill();
-  ctx.restore();
-}
 
-// Draw the full level-clear bumper.
-function drawLevelClearBumper() {
-  ctx.save();
-  ctx.globalAlpha = 0.85;
-  ctx.fillStyle = "#1a2340";
-  ctx.fillRect(0, 0, W, H);
-  ctx.globalAlpha = 1;
-  for (let i = 0; i < confetti.length; i++) {
-    const p = confetti[i];
-    ctx.save();
-    ctx.globalAlpha = p.life;
-    ctx.translate(p.x, p.y);
-    ctx.rotate(p.a);
-    ctx.fillStyle = i % 3 === 0 ? "#FFD700" : (i % 3 === 1 ? "#FF1493" : "#00BFFF");
-    ctx.fillRect(-5, -10, 10, 20);
-    ctx.restore();
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  ctx.strokeStyle = "#FFFFFF";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Draw the arrow using simple canvas geometry.
+
+  const arrowX = x + w * 0.19;
+  const arrowY = y + h * 0.5;
+
+  const arrowSize = Math.min(
+    18,
+    h * 0.25,
+    w * 0.12
+  );
+
+  ctx.beginPath();
+
+  if (direction === "up") {
+    ctx.moveTo(
+      arrowX,
+      arrowY - arrowSize
+    );
+
+    ctx.lineTo(
+      arrowX - arrowSize,
+      arrowY + arrowSize * 0.4
+    );
+
+    ctx.lineTo(
+      arrowX - arrowSize * 0.35,
+      arrowY + arrowSize * 0.4
+    );
+
+    ctx.lineTo(
+      arrowX - arrowSize * 0.35,
+      arrowY + arrowSize
+    );
+
+    ctx.lineTo(
+      arrowX + arrowSize * 0.35,
+      arrowY + arrowSize
+    );
+
+    ctx.lineTo(
+      arrowX + arrowSize * 0.35,
+      arrowY + arrowSize * 0.4
+    );
+
+    ctx.lineTo(
+      arrowX + arrowSize,
+      arrowY + arrowSize * 0.4
+    );
+  } else {
+    ctx.moveTo(
+      arrowX,
+      arrowY + arrowSize
+    );
+
+    ctx.lineTo(
+      arrowX - arrowSize,
+      arrowY - arrowSize * 0.4
+    );
+
+    ctx.lineTo(
+      arrowX - arrowSize * 0.35,
+      arrowY - arrowSize * 0.4
+    );
+
+    ctx.lineTo(
+      arrowX - arrowSize * 0.35,
+      arrowY - arrowSize
+    );
+
+    ctx.lineTo(
+      arrowX + arrowSize * 0.35,
+      arrowY - arrowSize
+    );
+
+    ctx.lineTo(
+      arrowX + arrowSize * 0.35,
+      arrowY - arrowSize * 0.4
+    );
+
+    ctx.lineTo(
+      arrowX + arrowSize,
+      arrowY - arrowSize * 0.4
+    );
   }
-  for (let i = 0; i < stars.length; i++) drawStar(stars[i].x, stars[i].y, 12, stars[i].life);
+
+  ctx.closePath();
+
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fill();
+
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.font = "bold 64px Arial Black, Arial, sans-serif";
-  ctx.lineWidth = 6;
-  ctx.strokeStyle = "#000000";
-  ctx.strokeText("LEVEL CLEAR", W * 0.5, H * 0.44);
-  ctx.fillStyle = "#FFD700";
-  ctx.fillText("LEVEL CLEAR", W * 0.5, H * 0.44);
-  ctx.font = "bold 28px Arial Black, Arial, sans-serif";
+
+  ctx.font =
+    'bold ' +
+    Math.min(25, Math.max(17, h * 0.34)) +
+    'px "Arial Black", Arial, sans-serif';
+
   ctx.fillStyle = "#FFFFFF";
-  ctx.fillText("L" + level + " COMPLETE", W * 0.5, H * 0.53);
+
+  ctx.fillText(
+    label,
+    x + w * 0.61,
+    y + h * 0.53,
+    w * 0.62
+  );
+
   ctx.restore();
 }
 
-// Draw fail/katching dark emphasis without DOM.
-function drawStateOverlay() {
-  if (gameState !== "levelFail" && gameState !== "katching") return;
+function renderLevelClearBumper() {
   ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,0.25)";
+
+  ctx.fillStyle = "rgba(0,0,0,0.48)";
   ctx.fillRect(0, 0, W, H);
+
+  const panelX = W * 0.08;
+  const panelY = H * 0.36;
+  const panelW = W * 0.84;
+  const panelH = H * 0.23;
+
+  roundedRectPath(
+    ctx,
+    panelX,
+    panelY,
+    panelW,
+    panelH,
+    20
+  );
+
+  ctx.fillStyle = "rgba(0,55,17,0.90)";
+  ctx.fill();
+
+  ctx.strokeStyle = "#00FF00";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round";
+
+  ctx.font =
+    'bold ' +
+    Math.min(37, W * 0.088) +
+    'px "Arial Black", Arial, sans-serif';
+
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "#000000";
+  ctx.fillStyle = "#00FF00";
+
+  ctx.strokeText(
+    "LEVEL CLEAR!",
+    W * 0.5,
+    panelY + panelH * 0.43,
+    panelW * 0.93
+  );
+
+  ctx.fillText(
+    "LEVEL CLEAR!",
+    W * 0.5,
+    panelY + panelH * 0.43,
+    panelW * 0.93
+  );
+
+  ctx.font = "bold 17px Arial, sans-serif";
+  ctx.fillStyle = "#FFFFFF";
+
+  ctx.fillText(
+    "NEXT LEVEL " + (level + 1),
+    W * 0.5,
+    panelY + panelH * 0.73
+  );
+
   ctx.restore();
 }
 
-// Draw the mandatory temporary QA line last.
-function drawDebug() {
-  const line = "state:" + gameState +
-    " frames:" + frameCount +
-    " timer:" + levelTimeLeft.toFixed(1) +
-    " dt:" + currentDt.toFixed(3) +
-    " ma:" + manja.toFixed(2) +
-    " px:" + (player.x | 0) +
-    " py:" + (player.y | 0) +
-    " ax:" + (ai.x | 0) +
-    " ay:" + (ai.y | 0);
+function renderLevelFailBumper() {
   ctx.save();
+
+  ctx.fillStyle = "rgba(0,0,0,0.52)";
+  ctx.fillRect(0, 0, W, H);
+
+  const panelX = W * 0.08;
+  const panelY = H * 0.36;
+  const panelW = W * 0.84;
+  const panelH = H * 0.23;
+
+  roundedRectPath(
+    ctx,
+    panelX,
+    panelY,
+    panelW,
+    panelH,
+    20
+  );
+
+  ctx.fillStyle = "rgba(92,0,20,0.92)";
+  ctx.fill();
+
+  ctx.strokeStyle = "#FF1744";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round";
+
+  ctx.font =
+    'bold ' +
+    Math.min(39, W * 0.095) +
+    'px "Arial Black", Arial, sans-serif';
+
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "#000000";
+  ctx.fillStyle = "#FF1744";
+
+  ctx.strokeText(
+    failReason,
+    W * 0.5,
+    panelY + panelH * 0.43,
+    panelW * 0.93
+  );
+
+  ctx.fillText(
+    failReason,
+    W * 0.5,
+    panelY + panelH * 0.43,
+    panelW * 0.93
+  );
+
+  ctx.font = "bold 17px Arial, sans-serif";
+  ctx.fillStyle = "#FFFFFF";
+
+  ctx.fillText(
+    "RETRY LEVEL " + level,
+    W * 0.5,
+    panelY + panelH * 0.73
+  );
+
+  ctx.restore();
+}
+
+function renderDebugLine() {
+  ctx.save();
+
+  ctx.globalAlpha = 0.7;
+  ctx.fillStyle = "#000000";
+
+  ctx.fillRect(
+    0,
+    0,
+    W * 0.95,
+    30
+  );
+
+  ctx.globalAlpha = 1;
+
   ctx.font = "12px monospace";
   ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  const tw = ctx.measureText(line).width + 8;
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, tw, 17);
+  ctx.textBaseline = "middle";
   ctx.fillStyle = "#00FF00";
-  ctx.fillText(line, 4, 2);
+
+  const debugText =
+    "state:" + gameState +
+    " f:" + frameCount +
+    " t:" + levelTimeLeft.toFixed(1) +
+    " dt:" + lastDt.toFixed(3) +
+    " m:" + manja.toFixed(2) +
+    " p:" +
+      Math.round(player.x) +
+      "," +
+      Math.round(player.y) +
+    " a:" +
+      Math.round(ai.x) +
+      "," +
+      Math.round(ai.y);
+
+  ctx.fillText(
+    debugText,
+    5,
+    15,
+    Math.max(1, W * 0.95 - 10)
+  );
+
   ctx.restore();
 }
 
-// Render the exact required frame stack.
-function render() {
-  drawBackground();
-  drawThreadCover();
-  drawStrings();
-  drawKites();
-  drawHUD();
-  drawManja();
-  drawPrompts();
-  drawButtons();
-  drawStateOverlay();
-  if (gameState === "levelClear") drawLevelClearBumper();
-  drawDebug();
+function renderPrompts() {
+  if (promptQueue.length === 0) return;
+
+  const prompt = promptQueue[promptQueue.length - 1];
+
+  if (!prompt || prompt.timeLeft <= 0) return;
+
+  const fadeDuration = Math.min(
+    0.35,
+    prompt.duration
+  );
+
+  const alpha = Math.max(
+    0,
+    Math.min(
+      1,
+      prompt.timeLeft / fadeDuration
+    )
+  );
+
+  ctx.save();
+
+  ctx.globalAlpha = alpha;
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round";
+
+  ctx.font =
+    'bold 34px "Arial Black", Arial, sans-serif';
+
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = "#000000";
+  ctx.fillStyle = prompt.color;
+
+  ctx.strokeText(
+    prompt.text,
+    W * 0.5,
+    H * 0.20,
+    W * 0.94
+  );
+
+  ctx.fillText(
+    prompt.text,
+    W * 0.5,
+    H * 0.20,
+    W * 0.94
+  );
+
+  ctx.restore();
 }
 
-// Main RAF loop with dt clamped to 0.05 seconds.
-function gameLoop(timestamp) {
-  const rawDt = lastTimestamp ? (timestamp - lastTimestamp) / 1000 : 0;
-  const dt = Math.min(0.05, Math.max(0, rawDt));
-  currentDt = dt;
-  lastTimestamp = timestamp;
-  frameCount += 1;
-  try {
-    pollResize();
-    if (!paused) {
-      elapsed += dt;
-      updateAmbient(dt);
-      updatePrompts(dt);
-      if (gameState === "playing") updatePlaying(dt);
-      else if (gameState === "katching") updateKatching(dt);
-      else if (gameState === "levelClear") updateLevelClear(dt);
-      else if (gameState === "levelFail") updateLevelFail(dt);
-    }
-    render();
-  } catch (err) {
-    console.error("PATANG v5 frame error:", err);
+// ============================================================
+// 11. PROMPT HELPERS
+// ============================================================
+
+function pushPrompt(text, color, duration) {
+  const safeDuration = Math.max(
+    0.05,
+    duration || 1
+  );
+
+  promptQueue.push({
+    text: String(text),
+    color: color || "#FFFFFF",
+    duration: safeDuration,
+    timeLeft: safeDuration
+  });
+
+  // Avoid an indefinitely growing prompt history.
+
+  if (promptQueue.length > 12) {
+    promptQueue.shift();
   }
+}
+
+function updatePrompts(dt) {
+  for (let i = promptQueue.length - 1; i >= 0; i--) {
+    promptQueue[i].timeLeft -= dt;
+
+    if (promptQueue[i].timeLeft <= 0) {
+      promptQueue.splice(i, 1);
+    }
+  }
+}
+
+// ============================================================
+// 12. BOOTSTRAP
+// ============================================================
+
+function init() {
+  if (initialized) return;
+
+  initialized = true;
+
+  document.body.style.margin = "0";
+  document.body.style.padding = "0";
+  document.body.style.overflow = "hidden";
+
+  canvas =
+    document.getElementById("gameCanvas") ||
+    document.querySelector("canvas");
+
+  if (!canvas) {
+    canvas = document.createElement("canvas");
+    canvas.id = "gameCanvas";
+    document.body.appendChild(canvas);
+  }
+
+  canvas.style.position = "fixed";
+  canvas.style.left = "0";
+  canvas.style.top = "0";
+  canvas.style.width = "100vw";
+  canvas.style.height = "100vh";
+  canvas.style.display = "block";
+  canvas.style.touchAction = "none";
+  canvas.style.userSelect = "none";
+
+  ctx = canvas.getContext("2d");
+
+  recomputeLayout();
+
+  resetLevel(1);
+  transitionState("home");
+
+  canvas.addEventListener(
+    "pointerdown",
+    handlePointerDown,
+    { passive: false }
+  );
+
+  window.addEventListener(
+    "resize",
+    recomputeLayout
+  );
+
+  // Load the background asynchronously.
+  // The animation loop does not depend on image completion.
+
+  sceneImage = new Image();
+
+  sceneImage.onload = function () {
+    sceneReady = true;
+    computeCoverRect();
+  };
+
+  sceneImage.onerror = function () {
+    sceneReady = false;
+    console.warn(
+      "PATANG: scene.png unavailable; using fallback background."
+    );
+  };
+
+  sceneImage.src = "/assets/scene.png";
+
+  lastTime = performance.now();
+}
+
+window.addEventListener(
+  "load",
+  init,
+  { once: true }
+);
+
+// ============================================================
+// 13. MAIN ANIMATION LOOP
+// ============================================================
+
+function gameLoop(now) {
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+
+  lastTime = now;
+
+  lastDt = Number.isFinite(dt)
+    ? Math.max(0, dt)
+    : 0;
+
+  frameCount++;
+
+  try {
+    update(lastDt);
+    render();
+  } catch (error) {
+    console.error(
+      "PATANG v6.0 frame error:",
+      error
+    );
+  }
+
+  // Deliberately outside try/catch.
+  // A failed update or render cannot terminate the RAF loop.
+
   requestAnimationFrame(gameLoop);
 }
 
-canvas.style.touchAction = "none";
-canvas.addEventListener("pointerdown", onPointerDown, { passive: false });
-recomputeLayout();
-resetLevel();
-requestAnimationFrame(gameLoop);
+// ============================================================
+// 14. START RAF ON WINDOW LOAD
+// ============================================================
+
+// Start immediately after init when the page is already loaded.
+// Otherwise, start on the load event, without waiting for scene.png.
+
+if (document.readyState === "complete") {
+  init();
+  requestAnimationFrame(gameLoop);
+} else {
+  window.addEventListener(
+    "load",
+    function startGameLoop() {
+      requestAnimationFrame(gameLoop);
+    },
+    { once: true }
+  )
+
