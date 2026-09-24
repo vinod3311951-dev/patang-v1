@@ -81,6 +81,16 @@ let pauseZone = null;
 let pauseHomeZone = null;
 let homePlayZone = null;
 let homeLevelsZone = null;
+let terminalZones = [];
+const TERMINALS = [
+  { name: "UDAAN", from: 1, to: 15 },
+  { name: "DHEEL", from: 16, to: 30 },
+  { name: "PECH", from: 31, to: 45 },
+  { name: "MANJHA", from: 46, to: 60 },
+  { name: "KHENCH", from: 61, to: 75 },
+  { name: "KAATEH", from: 76, to: 90 },
+  { name: "PATANGBAAZ", from: 91, to: 105 }
+];
 
 let boyHandX = 0;
 let boyHandY = 0;
@@ -260,6 +270,19 @@ function initAudio() {
   }
 }
 
+function speakHindi(words) {
+  if (!("speechSynthesis" in window)) return;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(words);
+    u.lang = "hi-IN";
+    u.rate = 1.12;
+    u.pitch = 1.05;
+    u.volume = 0.95;
+    window.speechSynthesis.speak(u);
+  } catch (e) {}
+}
+
 function playPluck(rate) {
   if (!audioPluck) return;
 
@@ -418,6 +441,19 @@ function handlePointerDown(event) {
     (event.clientY - rect.top) *
     (canvas.height / rect.height);
 
+  if (gameState === "levelSelect") {
+    for (let i = 0; i < terminalZones.length; i++) {
+      if (inZone(x, y, terminalZones[i])) {
+        resetLevel(TERMINALS[i].from);
+        transitionState("playing");
+        pushPrompt(TERMINALS[i].name + " • LEVEL " + level, "#FFD700", 1.1);
+        return;
+      }
+    }
+    transitionState("home");
+    return;
+  }
+
   if (gameState === "home") {
     if (inZone(x, y, homePlayZone)) {
       resetLevel(1);
@@ -427,9 +463,7 @@ function handlePointerDown(event) {
     }
 
     if (inZone(x, y, homeLevelsZone)) {
-      // All 105 levels are unlocked: each tap advances the selected level.
-      level = level >= MAX_LEVEL ? 1 : level + 1;
-      pushPrompt("SELECTED LEVEL " + level, "#FFD700", 0.8);
+      transitionState("levelSelect");
       return;
     }
 
@@ -518,7 +552,8 @@ function transitionState(nextState) {
     "playing",
     "katching",
     "levelClear",
-    "levelFail"
+    "levelFail",
+    "levelSelect"
   ];
 
   if (!validStates.includes(nextState)) return;
@@ -577,13 +612,9 @@ function beginKatching(who) {
   playPluck(1.6);
 
   if (audioKatGai) {
-    try {
-      audioKatGai.currentTime = 0;
-      audioKatGai.play().catch(() => {});
-    } catch (e) {
-      // Optional cut sound.
-    }
+    try { audioKatGai.currentTime = 0; audioKatGai.play().catch(() => {}); } catch (e) {}
   }
+  speakHindi(who === "ai" ? (Math.random() < 0.5 ? "काट दी!" : "कट गई!") : "मांझा गया!");
 }
 
 function beginLevelClear() {
@@ -778,6 +809,7 @@ function update(dt) {
 
   switch (gameState) {
     case "home":
+    case "levelSelect":
       updateHome(dt);
       break;
 
@@ -921,6 +953,11 @@ function render() {
     return;
   }
 
+  if (gameState === "levelSelect") {
+    renderLevelSelect();
+    return;
+  }
+
   renderScene();
   renderStrings();
   renderKites();
@@ -967,6 +1004,28 @@ function render() {
   }
 
   renderPrompts();
+}
+
+function renderLevelSelect() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#C88A4A"; ctx.fillRect(0, 0, W, H);
+  if (sceneReady) { ctx.save(); ctx.globalAlpha = 0.30; ctx.drawImage(sceneImage, coverX, coverY, coverW, coverH); ctx.restore(); }
+  ctx.save(); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = 'bold 34px "Arial Black", Arial, sans-serif'; ctx.lineWidth = 5; ctx.strokeStyle = "#000"; ctx.fillStyle = "#FFD700";
+  ctx.strokeText("CHOOSE YOUR SKY", W*0.5, H*0.10); ctx.fillText("CHOOSE YOUR SKY", W*0.5, H*0.10);
+  ctx.font = "bold 15px Arial, sans-serif"; ctx.fillStyle = "#fff"; ctx.fillText("7 TERMINALS • 15 BATTLES EACH", W*0.5, H*0.145);
+  terminalZones = [];
+  const startY=H*0.19, gap=H*0.095, boxW=W*0.82, boxH=Math.min(62,H*0.075);
+  for(let i=0;i<TERMINALS.length;i++){
+    const t=TERMINALS[i], z={x:(W-boxW)/2,y:startY+i*gap,w:boxW,h:boxH}; terminalZones.push(z);
+    roundedRectPath(ctx,z.x,z.y,z.w,z.h,16);
+    const g=ctx.createLinearGradient(z.x,z.y,z.x+z.w,z.y); g.addColorStop(0,"rgba(255,20,147,0.92)"); g.addColorStop(1,"rgba(255,122,0,0.92)");
+    ctx.fillStyle=g; ctx.fill(); ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.stroke();
+    ctx.fillStyle="#fff"; ctx.font='bold 20px "Arial Black", Arial, sans-serif'; ctx.fillText((i+1)+". "+t.name, W*0.5, z.y+z.h*0.38);
+    ctx.font="bold 12px Arial, sans-serif"; ctx.fillText("LEVELS "+t.from+"–"+t.to, W*0.5, z.y+z.h*0.72);
+  }
+  ctx.font="bold 13px Arial, sans-serif"; ctx.fillStyle="#fff"; ctx.fillText("Tap a terminal to enter • tap outside to go back",W*0.5,H*0.91,W*0.92);
+  ctx.restore();
 }
 
 function renderHome() {
