@@ -1,0 +1,19 @@
+{
+  "name": "Patang — A Kite Fight",
+  "short_name": "Patang",
+  "description": "105 Indian kite-fighting battles across seven terminals.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#C88A4A",
+  "theme_color": "#C88A4A",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "patang-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
