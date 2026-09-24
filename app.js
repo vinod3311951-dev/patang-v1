@@ -1995,5 +1995,5 @@ if (document.readyState === "complete") {
       requestAnimationFrame(gameLoop);
     },
     { once: true }
-  )
-
+  );
+}
