@@ -1,5 +1,5 @@
-// PATANG_VERSION: 2.3.0
-// LAST_MAJOR_CHANGE: Both threads black, minimal ambience (water/sparrows/crows), prompt sound debug line, AI kite off-screen string
+// PATANG_VERSION: 2.4.0
+// LAST_MAJOR_CHANGE: Audio gain 20x boost + master gain + test beep, KAT GAI reward sparkles, red-zone kite pulse, painted-hand string anchor post-cover-fit, HUD size tightening
 "use strict";
 
 const canvas=document.getElementById("gameCanvas");
@@ -7,10 +7,11 @@ const ctx=canvas.getContext("2d");
 const sceneImage=new Image();
 const layout={handX:0,handY:0,kiteMinX:0,kiteMaxX:0,kiteMinY:0,kiteMaxY:0,stringWidth:1,sceneX:0,sceneY:0,sceneW:0,sceneH:0,play:{},dheel:{},khench:{},pause:{}};
 const prompts=[];
+const reward={active:false,time:0,x:0,y:0,particles:[]};
 const player={x:0,y:0,vx:80,vy:0,rotation:0,direction:1};
 const ai={x:0,y:0,vx:0,vy:0,rotation:0,state:"neutral",diveTime:0,nextDive:12,hit:false};
 const ambient={water:null,waterFilter:null,waterGain:null,waterLfo:null,waterLfoGain:null,bird:0,crow:0};
-let assetsReady=false,assetError=false,mode="home",paused=false,level=1,timer=58,tension=.25,zone="green",clock=0,last=performance.now(),audioCtx=null,levelCutTriggered=false,lastSoundName="none";
+let assetsReady=false,assetError=false,mode="home",paused=false,level=1,timer=58,tension=.25,zone="green",clock=0,last=performance.now(),audioCtx=null,masterGain=null,testBeepPlayed=false,levelCutTriggered=false,rewardTriggered=false,lastSoundName="none";
 
 // Return canvas width.
 function W(){
@@ -55,8 +56,6 @@ function recomputeLayout(){
   if(canvas.width===0||canvas.height===0){return;}
   const sceneAspect=1536/864;
   const canvasAspect=canvas.width/canvas.height;
-  layout.handX=canvas.width*.53;
-  layout.handY=canvas.height*.60;
   layout.kiteMinX=canvas.width*.10;
   layout.kiteMaxX=canvas.width*.90;
   layout.kiteMinY=canvas.height*.16;
@@ -72,6 +71,8 @@ function recomputeLayout(){
     layout.sceneX=0;
     layout.sceneY=(canvas.height-layout.sceneH)/2;
   }
+  layout.handX=layout.sceneX+.53*layout.sceneW;
+  layout.handY=layout.sceneY+.60*layout.sceneH;
   layout.stringWidth=1/window.devicePixelRatio;
   layout.play={x:W()*.5-92,y:H()*.68-31,w:184,h:62};
   layout.dheel={x:W()*.06,y:H()*.88,w:140,h:70};
@@ -118,7 +119,7 @@ function resetAI(){
 // Start gameplay.
 function startGame(){
   if(!assetsReady){return;}
-  mode="playing";paused=false;timer=levelDuration(level);tension=.25;zone="green";clock=0;levelCutTriggered=false;prompts.length=0;
+  mode="playing";paused=false;timer=levelDuration(level);tension=.25;zone="green";clock=0;levelCutTriggered=false;rewardTriggered=false;reward.active=false;prompts.length=0;
   resetPlayer();resetAI();scheduleAmbient();startAmbience();
 }
 
@@ -138,7 +139,7 @@ function tone(name,type,hz,duration,gainValue,endHz,delay){
   o.type=type;o.frequency.setValueAtTime(hz,start);
   if(endHz){o.frequency.exponentialRampToValueAtTime(endHz,start+duration);}
   g.gain.setValueAtTime(gainValue,start);g.gain.exponentialRampToValueAtTime(.0001,start+duration);
-  o.connect(g);g.connect(audioCtx.destination);
+  o.connect(g);g.connect(masterGain);
   o.onended=function toneEnded(){o.disconnect();g.disconnect();};
   o.start(start);o.stop(start+duration);
 }
@@ -164,8 +165,8 @@ function sfxDheel(){
   if(!audioCtx||audioCtx.state!=="running"){return;}
   const now=audioCtx.currentTime,s=audioCtx.createBufferSource(),f=audioCtx.createBiquadFilter(),g=audioCtx.createGain();
   s.buffer=noiseBuffer(.09,false);f.type="bandpass";f.frequency.value=800;f.Q.value=.8;
-  g.gain.setValueAtTime(.18,now);g.gain.exponentialRampToValueAtTime(.0001,now+.08);
-  s.connect(f);f.connect(g);g.connect(audioCtx.destination);
+  g.gain.setValueAtTime(.35,now);g.gain.exponentialRampToValueAtTime(.0001,now+.08);
+  s.connect(f);f.connect(g);g.connect(masterGain);
   s.onended=function dheelEnded(){s.disconnect();f.disconnect();g.disconnect();};
   s.start(now);s.stop(now+.08);
 }
@@ -173,14 +174,14 @@ function sfxDheel(){
 // Play KHENCH pluck.
 function sfxKhench(){
   if(!audioCtx){return;}
-  tone("khench","triangle",220,.10,.18,null,0);
+  tone("khench","triangle",220,.10,.30,null,0);
 }
 
 // Play KAT GAI snap.
 function sfxKatGai(){
   if(!audioCtx){return;}
-  tone("kat gai 400","square",400,.06,.16,null,0);
-  tone("kat gai 600","square",600,.06,.16,null,.065);
+  tone("kat gai 400","square",400,.06,.40,null,0);
+  tone("kat gai 600","square",600,.06,.40,null,.065);
 }
 
 // Play MANJA GAYA twang.
@@ -190,8 +191,8 @@ function sfxManja(){
   if(!audioCtx||audioCtx.state!=="running"){return;}
   const now=audioCtx.currentTime,o=audioCtx.createOscillator(),v=audioCtx.createOscillator(),vg=audioCtx.createGain(),g=audioCtx.createGain();
   o.type="sine";o.frequency.value=180;v.type="sine";v.frequency.value=5;vg.gain.value=7;
-  g.gain.setValueAtTime(.18,now);g.gain.exponentialRampToValueAtTime(.0001,now+.30);
-  v.connect(vg);vg.connect(o.frequency);o.connect(g);g.connect(audioCtx.destination);
+  g.gain.setValueAtTime(.35,now);g.gain.exponentialRampToValueAtTime(.0001,now+.30);
+  v.connect(vg);vg.connect(o.frequency);o.connect(g);g.connect(masterGain);
   o.onended=function manjaEnded(){o.disconnect();v.disconnect();vg.disconnect();g.disconnect();};
   o.start(now);v.start(now);o.stop(now+.30);v.stop(now+.30);
 }
@@ -199,20 +200,20 @@ function sfxManja(){
 // Play yellow warning pulse.
 function sfxYellow(){
   if(!audioCtx){return;}
-  tone("yellow warning","sine",80,.15,.04,null,0);
+  tone("yellow warning","sine",660,.20,.30,null,0);
 }
 
 // Play red danger pulse.
 function sfxRed(){
   if(!audioCtx){return;}
-  tone("red danger","sine",120,.12,.06,null,0);
+  tone("red danger","sine",880,.20,.35,null,0);
 }
 
 // Play level-clear chime.
 function sfxClear(){
   if(!audioCtx){return;}
-  tone("level clear C5","sine",523,.20,.12,null,0);
-  tone("level clear E5","sine",659,.20,.12,null,.21);
+  tone("level clear C5","sine",523,.20,.35,null,0);
+  tone("level clear E5","sine",659,.20,.35,null,.21);
 }
 
 // Play level-fail descent.
@@ -225,7 +226,7 @@ function sfxFail(){
 // Play sparrow chirp.
 function sfxBird(){
   if(!audioCtx){return;}
-  tone("sparrow","sine",2500,.08,.04,3500,0);
+  tone("sparrow","sine",2500,.08,.20,3500,0);
 }
 
 // Play crow caw.
@@ -239,10 +240,10 @@ function sfxCrow(){
   o.type="sawtooth";
   o.frequency.setValueAtTime(400,now);
   g.gain.setValueAtTime(.0001,now);
-  g.gain.linearRampToValueAtTime(.03,now+.015);
+  g.gain.linearRampToValueAtTime(.20,now+.015);
   g.gain.exponentialRampToValueAtTime(.0001,now+.20);
   o.connect(g);
-  g.connect(audioCtx.destination);
+  g.connect(masterGain);
   o.onended=function crowEnded(){o.disconnect();g.disconnect();};
   o.start(now);
   o.stop(now+.20);
@@ -261,12 +262,12 @@ function startAmbience(){
   water.loop=true;
   waterFilter.type="highpass";
   waterFilter.frequency.value=1000;
-  waterGain.gain.value=.03;
+  waterGain.gain.value=.12;
   waterLfo.frequency.value=.08;
   waterLfoGain.gain.value=.008;
   water.connect(waterFilter);
   waterFilter.connect(waterGain);
-  waterGain.connect(audioCtx.destination);
+  waterGain.connect(masterGain);
   waterLfo.connect(waterLfoGain);
   waterLfoGain.connect(waterGain.gain);
   water.start(now);
@@ -337,6 +338,19 @@ function togglePause(){
   if(paused){stopAmbience();}else{startAmbience();scheduleAmbient();}
 }
 
+// Play one routing test beep after audio initialization.
+function playTestBeep(){
+  if(!audioCtx||!masterGain){return;}
+  logSfx("test beep");
+  const now=audioCtx.currentTime;
+  const o=audioCtx.createOscillator();
+  const g=audioCtx.createGain();
+  o.type="sine";o.frequency.value=440;g.gain.value=.5;
+  o.connect(g);g.connect(masterGain);
+  o.onended=function testBeepEnded(){o.disconnect();g.disconnect();};
+  o.start(now);o.stop(now+.10);
+}
+
 // Convert pointer to canvas pixels.
 function pointerPoint(e){
   const r=canvas.getBoundingClientRect();
@@ -353,9 +367,15 @@ function hit(p,z){
 function handlePointerDown(e){
   if(!audioCtx){
     const AudioConstructor=window.AudioContext||window.webkitAudioContext;
-    if(AudioConstructor){audioCtx=new AudioConstructor();}
+    if(AudioConstructor){
+      audioCtx=new AudioConstructor();
+      masterGain=audioCtx.createGain();
+      masterGain.gain.value=1.0;
+      masterGain.connect(audioCtx.destination);
+    }
   }
   if(audioCtx&&audioCtx.state==="suspended"){audioCtx.resume();}
+  if(audioCtx&&!testBeepPlayed){playTestBeep();testBeepPlayed=true;}
   console.log("AUDIO: ctx state = "+(audioCtx?audioCtx.state:"unavailable"));
   e.preventDefault();
   const p=pointerPoint(e);
@@ -416,9 +436,28 @@ function cutKite(){
   if(levelCutTriggered){tension=1;return;}
   levelCutTriggered=true;
   sfxKatGai();
-  prompt("KAT GAI!","#FF0000",38,1.2);
+  prompt("KAT GAI!","#FF0000",38,1.5);
+  startReward();
   tension=.25;
   zone="green";
+}
+
+// Start the KAT GAI reward animation and chime.
+function startReward(){
+  if(rewardTriggered){return;}
+  rewardTriggered=true;
+  reward.active=true;reward.time=0;reward.x=ai.x;reward.y=ai.y;reward.particles.length=0;
+  for(let i=0;i<12;i+=1){const angle=i*Math.PI*2/12;reward.particles.push({vx:Math.cos(angle)*200,vy:Math.sin(angle)*200});}
+  tone("reward G5","sine",784,.18,.35,null,0);
+  tone("reward B5","sine",988,.18,.35,null,.15);
+  tone("reward D6","sine",1175,.18,.35,null,.30);
+}
+
+// Update the RAF-driven reward animation.
+function updateReward(dt){
+  if(!reward.active){return;}
+  reward.time+=dt;
+  if(reward.time>=1.5){reward.active=false;resetAI();}
 }
 
 // Update danger tension.
@@ -447,6 +486,8 @@ function clearLevel(){
   tension=.25;
   zone="green";
   levelCutTriggered=false;
+  rewardTriggered=false;
+  reward.active=false;
   resetPlayer();
   resetAI();
 }
@@ -456,7 +497,7 @@ function update(dt){
   updatePrompts(dt);
   if(mode!=="playing"||paused){return;}
   clock+=dt;timer-=dt;
-  updatePlayer(dt);updateAI(dt);updateTension(dt);updateAmbient();
+  updatePlayer(dt);updateAI(dt);updateTension(dt);updateAmbient();updateReward(dt);
   if(timer<=0){clearLevel();}
 }
 
@@ -477,7 +518,7 @@ function drawScene(){
 
 // Draw dark hairline string.
 function drawString(){
-  ctx.save();ctx.lineWidth=1/window.devicePixelRatio;ctx.strokeStyle="rgba(0, 0, 0, 0.85)";ctx.shadowBlur=0;
+  ctx.save();ctx.lineWidth=1/window.devicePixelRatio;ctx.strokeStyle="rgba(255, 245, 220, 0.9)";ctx.shadowBlur=0;
   ctx.beginPath();ctx.moveTo(layout.handX,layout.handY);ctx.lineTo(player.x,player.y);ctx.stroke();ctx.restore();
 }
 
@@ -509,18 +550,40 @@ function drawAIGhosts(size){
 
 // Draw AI kite.
 function drawAI(){
-  const size=W()*.055;drawAIGhosts(size);drawKite(ai.x,ai.y,size,ai.rotation,"#7B2FBE","#4CAF50",false);
+  const size=W()*.055;
+  drawAIGhosts(size);
+  const wobble=reward.active&&reward.time<.5?(Math.random()-.5)*.22:0;
+  drawKite(ai.x,ai.y,size,ai.rotation+wobble,"#7B2FBE","#4CAF50",false);
 }
 
 // Draw player kite.
 function drawPlayer(){
-  drawKite(player.x,player.y,W()*.07,player.rotation,"#FF1493","#FFFFFF",true);
+  const size=W()*.07;
+  if(zone==="red"){
+    const pulse=(Math.sin(clock*Math.PI*4)+1)/2;
+    const radius=15+10*pulse;
+    ctx.save();ctx.fillStyle="rgba(255,0,0,.18)";ctx.beginPath();ctx.arc(player.x,player.y,size+radius,0,Math.PI*2);ctx.fill();ctx.restore();
+    drawKite(player.x,player.y,size,player.rotation,"#FF1493","#FF0000",true);
+    return;
+  }
+  drawKite(player.x,player.y,size,player.rotation,"#FF1493","#FFFFFF",true);
+}
+
+// Draw reward sparkles and fading KAT GAI overlay.
+function drawReward(){
+  if(!reward.active){return;}
+  const alpha=clamp(1-reward.time/1.5,0,1);
+  ctx.save();
+  ctx.globalAlpha=alpha;ctx.fillStyle="#FFD700";
+  for(let i=0;i<reward.particles.length;i+=1){const p=reward.particles[i];ctx.beginPath();ctx.arc(reward.x+p.vx*reward.time,reward.y+p.vy*reward.time,5,0,Math.PI*2);ctx.fill();}
+  ctx.font="900 38px 'Arial Black',sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";ctx.lineWidth=4;ctx.strokeStyle="#000";ctx.shadowColor="#000";ctx.shadowBlur=8;
+  ctx.strokeText("KAT GAI!",W()*.5,H()*.20);ctx.fillStyle="#FF0000";ctx.fillText("KAT GAI!",W()*.5,H()*.20);ctx.restore();
 }
 
 // Draw HUD pill.
 function pill(x,y,w,text){
   ctx.fillStyle="#1a2340";ctx.beginPath();ctx.roundRect(x,y,w,40,20);ctx.fill();
-  ctx.fillStyle="#fff";ctx.font="700 15px Arial";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(text,x+w/2,y+20);
+  ctx.fillStyle="#fff";ctx.font="700 20px Arial";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(text,x+w/2,y+20);
 }
 
 // Format timer.
@@ -533,7 +596,7 @@ function formatTime(seconds){
 function drawHUD(){
   pill(12,12,72,"L"+level);pill(W()/2-50,12,100,formatTime(timer));
   ctx.fillStyle="#1a2340";ctx.beginPath();ctx.roundRect(layout.pause.x,layout.pause.y,40,40,12);ctx.fill();
-  ctx.fillStyle="#fff";ctx.fillRect(layout.pause.x+12,layout.pause.y+10,5,20);ctx.fillRect(layout.pause.x+23,layout.pause.y+10,5,20);
+  ctx.fillStyle="#fff";ctx.fillRect(layout.pause.x+13,layout.pause.y+11,4,18);ctx.fillRect(layout.pause.x+23,layout.pause.y+11,4,18);
 }
 
 // Draw danger bar.
@@ -607,7 +670,7 @@ function drawAudioDebug(){
   ctx.fillStyle="#fff";
   ctx.strokeStyle="rgba(0,0,0,.8)";
   ctx.lineWidth=3;
-  const text="AUDIO: "+(audioCtx?audioCtx.state:"null")+"  SFX: "+lastSoundName;
+  const text="AUDIO: "+(audioCtx?audioCtx.state:"null")+"  MASTER: "+(masterGain?masterGain.gain.value:"null")+"  SFX: "+lastSoundName;
   ctx.strokeText(text,8,8);
   ctx.fillText(text,8,8);
   ctx.restore();
@@ -622,6 +685,7 @@ function drawFrame(){
   drawAIString();
   drawAI();
   drawPlayer();
+  drawReward();
   drawHUD();
   drawDangerBar();
   drawPrompts();
