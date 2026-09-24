@@ -1,5 +1,5 @@
-// PATANG_VERSION: 3.5.0
-// LAST_MAJOR_CHANGE: Forensic level-start freeze fix, exhaustive console logging at level init and RAF start, readable on-canvas frame counter
+// PATANG_VERSION: 3.6.0
+// LAST_MAJOR_CHANGE: Fixed instant-cut loop on level start, spawn grace period, kite reset on retry, timer decrement confirmed
 "use strict";
 
 const canvas=document.getElementById("gameCanvas");
@@ -22,6 +22,8 @@ let gameState="playing";
 let cutResult="";
 let stateTimer=0;
 let frameCount=0;
+let spawnGraceActive=false;
+let spawnGraceElapsed=0;
 let failReason="";
 let level=1;
 let levelTimeLeft=60;
@@ -147,8 +149,8 @@ function aiSharpness(){
 
 // Reset the player kite.
 function resetPlayer(){
-  player.x=W()*.66;
-  player.y=H()*.34;
+  player.x=W()*.62;
+  player.y=H()*.28;
   player.vx=72;
   player.vy=0;
   player.rotation=0;
@@ -160,8 +162,8 @@ function resetPlayer(){
 
 // Reset the AI kite.
 function resetAI(){
-  ai.x=W()*.28;
-  ai.y=H()*.25;
+  ai.x=W()*.15;
+  ai.y=H()*.15;
   ai.vx=-58;
   ai.vy=0;
   ai.rotation=0;
@@ -201,6 +203,8 @@ function startLevel(){
   resetEffects();
   resetPlayer();
   resetAI();
+  spawnGraceActive=true;
+  spawnGraceElapsed=0;
   console.log("LEVEL START: kites initialized");
   scheduleAmbient();
   console.log("LEVEL START: entering playing state");
@@ -516,7 +520,10 @@ function segmentIntersection(a,b,c,d){
 
 // Check the two live strings for contact.
 function checkStringCombat(){
-  if(player.cut||ai.cut||outcome.active||bumper.active){
+  if(player.cut||ai.cut||outcome.active||bumper.active||spawnGraceActive){
+    return;
+  }
+  if(Math.hypot(player.x-ai.x,player.y-ai.y)>W()*.60){
     return;
   }
   const playerOrigin={x:layout.handX,y:layout.handY};
@@ -726,6 +733,13 @@ function update(dt){
   if(paused){return;}
   clock+=dt;
   levelTimeLeft=Math.max(0,levelTimeLeft-dt);
+  if(frameCount%60===0) console.log("timer decrement, new value: " + levelTimeLeft);
+  if(spawnGraceActive){
+    spawnGraceElapsed+=dt;
+    if(spawnGraceElapsed>=2){
+      spawnGraceActive=false;
+    }
+  }
   updatePlayer(dt);
   updateAI(dt);
   updateTension(dt);
