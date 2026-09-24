@@ -5,7 +5,7 @@
 const canvas=document.getElementById("gameCanvas");
 const ctx=canvas.getContext("2d");
 const sceneImage=new Image();
-const layout={handX:0,handY:0,stringWidth:1,play:{},dheel:{},khench:{},pause:{}};
+const layout={handX:0,handY:0,kiteMinX:0,kiteMaxX:0,kiteMinY:0,kiteMaxY:0,stringWidth:1,play:{},dheel:{},khench:{},pause:{}};
 const prompts=[];
 const player={x:0,y:0,vx:80,vy:0,rotation:0,direction:1};
 const ai={x:0,y:0,vx:0,vy:0,rotation:0,state:"neutral",diveTime:0,nextDive:12,hit:false};
@@ -52,10 +52,14 @@ function pollCanvasSize(){
 
 // Recompute anchors and hit zones.
 function recomputeLayout(){
-  const BOY_HAND_X=canvas.width*.42;
+  const BOY_HAND_X=canvas.width*.50;
   const BOY_HAND_Y=canvas.height*.60;
   layout.handX=BOY_HAND_X;
   layout.handY=BOY_HAND_Y;
+  layout.kiteMinX=canvas.width*.10;
+  layout.kiteMaxX=canvas.width*.90;
+  layout.kiteMinY=canvas.height*.10;
+  layout.kiteMaxY=canvas.height*.48;
   layout.stringWidth=1/window.devicePixelRatio;
   layout.play={x:W()*.5-92,y:H()*.68-31,w:184,h:62};
   layout.dheel={x:W()*.22-53,y:H()*.86-53,w:106,h:106};
@@ -90,12 +94,12 @@ function levelDuration(n){
 
 // Reset player to center sky.
 function resetPlayer(){
-  player.x=W()*.5;player.y=H()*.38;player.vx=80;player.vy=0;player.rotation=0;player.direction=1;
+  player.x=W()*.62;player.y=H()*.28;player.vx=80;player.vy=0;player.rotation=0;player.direction=1;
 }
 
 // Reset AI to neutral sky.
 function resetAI(){
-  ai.x=W()*.72;ai.y=H()*.30;ai.vx=-40;ai.vy=0;ai.rotation=0;ai.state="neutral";ai.diveTime=0;ai.hit=false;ai.nextDive=clock+10+Math.random()*5;
+  ai.x=W()*.30;ai.y=H()*.22;ai.vx=-40;ai.vy=0;ai.rotation=0;ai.state="neutral";ai.diveTime=0;ai.hit=false;ai.nextDive=clock+10+Math.random()*5;
 }
 
 // Start gameplay.
@@ -335,14 +339,14 @@ function decayVy(dt){
 
 // Update player physics.
 function updatePlayer(dt){
-  if(player.x<=W()*.15){player.direction=1;}
-  else if(player.x>=W()*.85){player.direction=-1;}
+  if(player.x<=layout.kiteMinX){player.direction=1;}
+  else if(player.x>=layout.kiteMaxX){player.direction=-1;}
   const magnitude=60+20*Math.abs(Math.sin(clock*.62));
   const target=player.direction*magnitude;
   player.vx+=(target-player.vx)*(1-Math.exp(-dt*3.5));
   decayVy(dt);
-  player.x=clamp(player.x+player.vx*dt,W()*.15,W()*.85);
-  player.y=clamp(player.y+player.vy*dt,H()*.15,H()*.60);
+  player.x=clamp(player.x+player.vx*dt,layout.kiteMinX,layout.kiteMaxX);
+  player.y=clamp(player.y+player.vy*dt,layout.kiteMinY,layout.kiteMaxY);
   player.rotation=Math.atan2(player.vy,player.vx);
 }
 
@@ -361,13 +365,13 @@ function updateAI(dt){
     if(d<50&&!ai.hit){tension=clamp(tension+.30,0,1);ai.hit=true;}
     if(ai.diveTime>=1.2){ai.state="return";}
   }else{
-    const nx=W()*.72,ny=H()*.30,dx=nx-ai.x,dy=ny-ai.y,d=Math.max(1,Math.hypot(dx,dy));
+    const nx=W()*.30,ny=H()*.22,dx=nx-ai.x,dy=ny-ai.y,d=Math.max(1,Math.hypot(dx,dy));
     ai.vx=50*Math.sin(clock*.42+1.4)+(dx/d)*35;
     ai.vy=30*Math.sin(clock*.70)+(dy/d)*25;
     if(ai.state==="return"&&d<28){ai.state="neutral";ai.nextDive=clock+10+Math.random()*5;}
   }
-  ai.x=clamp(ai.x+ai.vx*dt,W()*.12,W()*.88);
-  ai.y=clamp(ai.y+ai.vy*dt,H()*.15,H()*.58);
+  ai.x=clamp(ai.x+ai.vx*dt,layout.kiteMinX,layout.kiteMaxX);
+  ai.y=clamp(ai.y+ai.vy*dt,layout.kiteMinY,layout.kiteMaxY);
   ai.rotation=Math.atan2(ai.vy,ai.vx);
 }
 
@@ -382,8 +386,8 @@ function cutKite(){
 function updateTension(dt){
   const y=player.y/H();
   tension+=.015*dt;
-  if(y<.28){tension+=.35*dt;}
-  else if(y>.52){tension+=.30*dt;}
+  if(y<.15){tension+=.35*dt;}
+  else if(y>.40){tension+=.30*dt;}
   else{tension-=.20*dt;}
   tension=clamp(tension,0,1);
   const next=tension>=.85?"red":tension>=.65?"yellow":"green";
@@ -420,7 +424,7 @@ function update(dt){
 
 // Draw warm fallback.
 function drawFallback(){
-  ctx.fillStyle="#6B3A2E";ctx.fillRect(0,0,W(),H());
+  ctx.fillStyle="#C88A4A";ctx.fillRect(0,0,W(),H());
   ctx.fillStyle="#fff";ctx.font="700 16px Arial";ctx.textAlign="center";ctx.textBaseline="middle";
   ctx.fillText(assetError?"Scene unavailable":"Loading scene…",W()/2,H()/2);
 }
@@ -428,7 +432,7 @@ function drawFallback(){
 // Draw scene letterboxed.
 function drawScene(){
   if(!assetsReady){drawFallback();return;}
-  ctx.fillStyle="#6B3A2E";ctx.fillRect(0,0,W(),H());
+  ctx.fillStyle="#C88A4A";ctx.fillRect(0,0,W(),H());
   const s=Math.min(W()/sceneImage.naturalWidth,H()/sceneImage.naturalHeight),dw=sceneImage.naturalWidth*s,dh=sceneImage.naturalHeight*s;
   ctx.drawImage(sceneImage,(W()-dw)/2,(H()-dh)/2,dw,dh);
 }
